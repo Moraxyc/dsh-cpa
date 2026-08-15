@@ -1,0 +1,30 @@
+{
+  "name": "dsh-cpa",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "adapter.js",
+    "config.js",
+    "cordis.patch.yml",
+    "README.md",
+    "README.en.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "check": "node --check index.js",
+    "test": "node --test test.js"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}

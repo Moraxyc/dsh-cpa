@@ -1,0 +1,4 @@
+# dsh-cpa registers a runtime plugin that owns the `cpa` provider route.
+- insert:
+    - id: dsh-cpa
+      name: dsh-cpa
