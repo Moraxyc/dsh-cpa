@@ -38,5 +38,10 @@ the binary is not on `PATH`.
 Models come from CPA's `/v1/models` and are refreshed every 5 minutes by
 default.
 
+## Settings Panel
+
+The Settings surface includes the CPA management panel. Auto-started CPA uses
+the generated management key; for an existing CPA set `CPA_MANAGEMENT_KEY`.
+
 Optional environment variables: `CPA_URL`, `CPA_API_KEY`,
 `CPA_MANAGEMENT_KEY`, `CPA_BIN`, `CPA_CONFIG`, `CPA_REFRESH_INTERVAL_MS`.

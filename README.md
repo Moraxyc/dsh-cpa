@@ -35,5 +35,10 @@ API key 写入当前进程的 `CPA_API_KEY`。二进制不在 PATH 时用 `CPA_B
 
 模型列表来自 CPA 的 `/v1/models`，默认每 5 分钟同步一次。
 
+## 设置面板
+
+Settings 里会显示 CPA 管理面板。自动启动时使用生成的 management key；
+已有 CPA 需要设置 `CPA_MANAGEMENT_KEY`。
+
 可选环境变量：`CPA_URL`、`CPA_API_KEY`、`CPA_MANAGEMENT_KEY`、`CPA_BIN`、
 `CPA_CONFIG`、`CPA_REFRESH_INTERVAL_MS`。

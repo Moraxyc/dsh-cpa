@@ -8,6 +8,7 @@ import {
   waitForCpa,
   writeManagedConfig,
 } from './config.js'
+import { installManagementPanelWhenReady } from './management.js'
 
 export const name = 'dsh-cpa'
 export const inject = ['llm']
@@ -21,6 +22,7 @@ export async function apply(ctx, config = {}) {
   const baseURL = options.url || `http://${options.host}:${options.port}/v1`
   const externalCpa = options.url.length > 0
   let apiKey = process.env[options.apiKeyEnv] || ''
+  let managementKey = options.managementKey
   let cpaHandle
   let models = []
 
@@ -28,7 +30,7 @@ export async function apply(ctx, config = {}) {
     try {
       if (!externalCpa) {
         apiKey = apiKey || randomKey('sk-dsh')
-        const managementKey = options.managementKey || randomKey('mgmt-dsh')
+        managementKey = managementKey || randomKey('mgmt-dsh')
         await writeManagedConfig(options.configPath, {
           host: options.host,
           port: options.port,
@@ -59,10 +61,12 @@ export async function apply(ctx, config = {}) {
         resolveApiKey: resolveApiKey(ctx, options.apiKeyEnv),
       })
       ctx.llm.registerAdapter([options.provider], adapter)
+      const disposePanel = installManagementPanelWhenReady(ctx, { baseURL, managementKey })
       let lastModels = models
 
       if (options.refreshIntervalMs <= 0) {
         return async () => {
+          disposePanel()
           await stopChild(cpaHandle)
         }
       }
@@ -81,6 +85,7 @@ export async function apply(ctx, config = {}) {
       timer.unref?.()
 
       return async () => {
+        disposePanel()
         clearInterval(timer)
         await stopChild(cpaHandle)
       }
