@@ -9,6 +9,7 @@ import {
   LlmAdapter,
   LlmError,
   ProviderRequestId,
+  ReasoningEffortId,
 } from '@deepseek-ai/dsh-llm'
 
 import { chatCompletionsUrl } from './config.js'
@@ -46,12 +47,31 @@ function httpErrorCode(status, detail) {
 }
 
 function modelInfo(provider, model) {
+  const name = model.displayName ?? model.id
+  const description = model.id === name ? undefined : model.id
   return {
     provider,
     id: model.id,
-    name: model.displayName ?? model.id,
-    ...model.description === undefined ? {} : { description: model.description },
+    name,
+    ...description === undefined ? {} : { description },
     inputModalities: ['text'],
+  }
+}
+
+function modelReasoningInfo(model) {
+  const reasoning = model?.reasoning
+  if (reasoning === undefined) return {}
+  return {
+    reasoning: {
+      efforts: reasoning.efforts.map(effort => ({
+        id: ReasoningEffortId(effort.id),
+        name: effort.name,
+        ...effort.description === undefined ? {} : { description: effort.description },
+      })),
+      ...reasoning.defaultEffort === undefined
+        ? {}
+        : { defaultEffort: ReasoningEffortId(reasoning.defaultEffort) },
+    },
   }
 }
 
@@ -64,7 +84,7 @@ function flattenText(blocks) {
 
 function assertTextOnly(blocks) {
   if (contentHasImage(blocks)) {
-    throw new LlmError('The CPA chat-completions adapter does not support image content.', 'UNSUPPORTED_CONTENT')
+    throw new LlmError('CPA does not support images', 'UNSUPPORTED_CONTENT')
   }
 }
 
@@ -183,7 +203,7 @@ export async function* parseSse(stream) {
     yield payload
   }
   if (!done) {
-    throw new LlmError('SSE stream ended without [DONE]', 'STREAM_CLOSED')
+    throw new LlmError('stream ended without [DONE]', 'STREAM_CLOSED')
   }
 }
 
@@ -251,7 +271,7 @@ export async function* translate(payloads) {
         reason: reason.kind === 'stop' && order.length === 0
           ? {
             kind: 'error',
-            failure: { message: 'model returned a completed response with no content', code: EMPTY_RESPONSE },
+            failure: { message: 'empty response', code: EMPTY_RESPONSE },
           }
           : reason,
       }
@@ -262,7 +282,7 @@ export async function* translate(payloads) {
     try {
       chunk = JSON.parse(payload)
     } catch {
-      throw new LlmError(`malformed SSE payload: ${payload.slice(0, 120)}`, 'MALFORMED_RESPONSE')
+      throw new LlmError(`malformed SSE: ${payload.slice(0, 120)}`, 'MALFORMED_RESPONSE')
     }
 
     for (const choice of chunk.choices ?? []) {
@@ -320,11 +340,11 @@ export async function* translate(payloads) {
     if (chunk.usage) pendingUsage = mapUsage(chunk.usage)
   }
 
-  throw new LlmError('SSE payload stream ended without [DONE]', 'STREAM_CLOSED')
+  throw new LlmError('stream ended without [DONE]', 'STREAM_CLOSED')
 }
 
 async function readError(response) {
-  let message = `CPA API error (HTTP ${response.status})`
+  let message = `CPA HTTP ${response.status}`
   let detail = ''
   try {
     const parsed = await response.json()
@@ -336,7 +356,7 @@ async function readError(response) {
         : message
     detail = [error?.code, error?.type, error?.message, parsed?.message].filter(Boolean).join(' ')
   } catch {
-    // HTTP status remains usable when the gateway returns a malformed body.
+    // Keep HTTP status for malformed error bodies.
   }
   const delay = providerRetryAfterMs(response.headers.get('retry-after'))
   const id = requestId(response.headers)
@@ -372,6 +392,7 @@ export class CpaAdapter extends LlmAdapter {
         contextWindow: configured?.contextLength ?? this.options.defaultContextWindow,
       },
       defaultMaxTokens: configured?.maxCompletionTokens ?? this.options.defaultMaxTokens,
+      ...modelReasoningInfo(configured),
     })
   }
 
@@ -397,9 +418,9 @@ export class CpaAdapter extends LlmAdapter {
       })
     } catch (error) {
       if (options.signal?.aborted) {
-        throw new LlmError('CPA request aborted by caller', 'ABORTED', { cause: error })
+        throw new LlmError('aborted', 'ABORTED', { cause: error })
       }
-      throw new LlmError(`CPA API request to ${url} failed`, 'TRANSPORT', { cause: error })
+      throw new LlmError('request failed', 'TRANSPORT', { cause: error })
     }
 
     if (!response.ok) {
@@ -407,7 +428,7 @@ export class CpaAdapter extends LlmAdapter {
       return
     }
     if (!response.body) {
-      throw new LlmError('CPA API returned no response body', 'EMPTY_RESPONSE')
+      throw new LlmError('empty response', 'EMPTY_RESPONSE')
     }
 
     yield* translate(parseSse(response.body))
@@ -427,10 +448,6 @@ export function resolveApiKey(ctx, ref) {
     if (ambient !== undefined && ambient.length > 0) {
       return assertUsableApiKey(ambient, 'dsh-cpa', ref)
     }
-    throw new LlmError(
-      `dsh-cpa: no API key for provider route "${ref}"; store ${ref} through the credentials`
-      + ' service (the web Models page writes it), or export it in the launching environment',
-      'MISSING_CREDENTIAL',
-    )
+    throw new LlmError(`no API key for ${ref}`, 'MISSING_CREDENTIAL')
   }
 }

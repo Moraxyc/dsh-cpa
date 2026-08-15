@@ -11,6 +11,7 @@
   "files": [
     "index.js",
     "management.js",
+    "runtime.js",
     "client.js",
     "adapter.js",
     "config.js",
@@ -23,14 +24,18 @@
       "patch": "./cordis.patch.yml"
     },
     "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-primitives"
+      ],
       "platform": "web"
     }
   },
   "scripts": {
-    "check": "node --check index.js && node --check management.js && node --check client.js",
+    "check": "node --check index.js && node --check management.js && node --check runtime.js && node --check client.js",
     "test": "node --test test.js"
   },
   "peerDependencies": {
+    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.0-rc.5",
     "@deepseek-ai/dsh-llm": "^0.1.0-rc.6"
   },
   "engines": {

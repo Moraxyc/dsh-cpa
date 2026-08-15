@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { Readable } from 'node:stream'
 
 export const STATUS_PATH = '/dsh-cpa/status'
+export const SETTINGS_PATH = '/dsh-cpa/settings'
 export const PANEL_PATH = '/dsh-cpa/management'
 
 const COOKIE_NAME = 'dsh_cpa_mgmt'
@@ -113,27 +114,33 @@ function responseHeaders(response) {
   return headers
 }
 
+function optionValue(options, key) {
+  return typeof options[key] === 'function' ? options[key]() : options[key]
+}
+
 async function servePanel(options, res) {
-  if (!options.managementKey) {
+  const baseURL = optionValue(options, 'baseURL')
+  const managementKey = optionValue(options, 'managementKey')
+  if (!managementKey) {
     sendJson(res, 503, { available: false })
     return
   }
   let response
   try {
-    response = await fetch(`${cpaRoot(options.baseURL)}/management.html`, {
+    response = await fetch(`${cpaRoot(baseURL)}/management.html`, {
       headers: { accept: 'text/html' },
       signal: AbortSignal.timeout(PANEL_TIMEOUT_MS),
     })
   } catch {
-    sendJson(res, 502, { error: 'CPA management panel is unavailable' })
+    sendJson(res, 502, { error: 'unavailable' })
     return
   }
   if (!response.ok) {
-    sendJson(res, 502, { error: `CPA management panel returned ${response.status}` })
+    sendJson(res, 502, { error: `HTTP ${response.status}` })
     return
   }
   const html = await response.text()
-  setManagementCookie(res, options.managementKey)
+  setManagementCookie(res, managementKey)
   res.writeHead(200, {
     'content-type': 'text/html; charset=utf-8',
     'cache-control': 'no-store',
@@ -143,18 +150,20 @@ async function servePanel(options, res) {
 }
 
 async function proxyManagement(options, url, req, res) {
-  if (!options.managementKey) {
+  const baseURL = optionValue(options, 'baseURL')
+  const managementKey = optionValue(options, 'managementKey')
+  if (!managementKey) {
     sendJson(res, 503, { available: false })
     return
   }
-  if (cookieValue(req.headers.cookie, COOKIE_NAME) !== managementCookieValue(options.managementKey)) {
-    sendJson(res, 403, { error: 'CPA management panel is not authorized' })
+  if (cookieValue(req.headers.cookie, COOKIE_NAME) !== managementCookieValue(managementKey)) {
+    sendJson(res, 403, { error: 'unauthorized' })
     return
   }
 
-  const target = `${cpaRoot(options.baseURL)}${url.pathname.slice(PANEL_PATH.length)}${url.search}`
+  const target = `${cpaRoot(baseURL)}${url.pathname.slice(PANEL_PATH.length)}${url.search}`
   const body = await readRequestBody(req)
-  const headers = requestHeaders(req, options.managementKey)
+  const headers = requestHeaders(req, managementKey)
   let response
   try {
     response = await fetch(target, {
@@ -164,7 +173,7 @@ async function proxyManagement(options, url, req, res) {
       signal: AbortSignal.timeout(PROXY_TIMEOUT_MS),
     })
   } catch {
-    sendJson(res, 502, { error: 'CPA management API is unavailable' })
+    sendJson(res, 502, { error: 'unavailable' })
     return
   }
 
@@ -180,7 +189,51 @@ async function proxyManagement(options, url, req, res) {
 
 function statusHandler(options) {
   return async (_req, res) => {
-    sendJson(res, 200, { available: Boolean(options.managementKey) })
+    const managementKey = optionValue(options, 'managementKey')
+    sendJson(res, 200, {
+      available: Boolean(managementKey),
+      ...options.getState ? { state: options.getState() } : {},
+    })
+  }
+}
+
+function settingsHandler(options) {
+  return async (req, res) => {
+    if (req.method === 'GET') {
+      sendJson(res, 200, options.getState ? options.getState() : { available: false })
+      return
+    }
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { error: 'method not allowed' })
+      return
+    }
+    let patch
+    let body
+    try {
+      body = await readRequestBody(req)
+    } catch {
+      sendJson(res, 400, { error: 'invalid body' })
+      return
+    }
+    try {
+      patch = body.length === 0 ? {} : JSON.parse(body.toString())
+    } catch {
+      sendJson(res, 400, { error: 'invalid JSON' })
+      return
+    }
+    if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) {
+      sendJson(res, 400, { error: 'invalid body' })
+      return
+    }
+    if (!options.update) {
+      sendJson(res, 503, { error: 'unavailable' })
+      return
+    }
+    try {
+      sendJson(res, 200, await options.update(patch))
+    } catch (error) {
+      sendJson(res, 400, { error: error?.message || String(error) })
+    }
   }
 }
 
@@ -214,6 +267,11 @@ export function installManagementPanelWhenReady(ctx, options) {
       kind: 'exact',
       path: STATUS_PATH,
       handler: statusHandler(options),
+    }))
+    disposers.push(server.register({
+      kind: 'exact',
+      path: SETTINGS_PATH,
+      handler: settingsHandler(options),
     }))
     disposers.push(server.register({
       kind: 'prefix',

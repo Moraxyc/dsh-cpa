@@ -3,8 +3,7 @@
 > **English** | [简体中文](README.md)
 
 A `dsh` bundle plugin for CLI Proxy API (CPA). It registers the `cpa`
-provider through its own `LlmAdapter`, sends requests to CPA's
-`/v1/chat/completions`, and keeps the model catalog synchronized from CPA's
+provider, sends requests to `/v1/chat/completions`, and syncs models from
 `/v1/models`.
 
 ## Install
@@ -13,7 +12,7 @@ provider through its own `LlmAdapter`, sends requests to CPA's
 npx @deepseek-ai/dsh plugin --profile web add .
 ```
 
-The headless profile works the same way:
+Headless profile:
 
 ```sh
 npx @deepseek-ai/dsh plugin --profile headless add .
@@ -30,18 +29,21 @@ npx @deepseek-ai/dsh web
 
 ## Auto-Start CPA
 
-When `CPA_URL` is unset, the plugin writes a local
-config to `$DSH_HOME/cpa/config.yaml`, starts `cli-proxy-api`, and exports the
-generated API key into `CPA_API_KEY` for the current process. Set `CPA_BIN` if
-the binary is not on `PATH`.
+When `CPA_URL` is unset, write `$DSH_HOME/cpa/config.yaml`, start
+`cli-proxy-api`, and export the generated key into `CPA_API_KEY`. Before
+starting, the plugin resolves the executable from `PATH`; if it is missing,
+set `CPA_BIN` or enter an absolute path in the internal CPA setting.
 
-Models come from CPA's `/v1/models` and are refreshed every 5 minutes by
-default.
+Models sync from `/v1/models` every 5 minutes.
 
 ## Settings Panel
 
-The Settings surface includes the CPA management panel. Auto-started CPA uses
-the generated management key; for an existing CPA set `CPA_MANAGEMENT_KEY`.
+The CPA page uses dsh web-app native components and supports internal and
+external startup modes, saved to `$DSH_HOME/cpa/settings.json`. Stop is only
+shown while the internal CPA is running. The management panel opens in a
+native modal. External mode configures URL, API key, and management key;
+internal mode configures the CPA executable path.
 
 Optional environment variables: `CPA_URL`, `CPA_API_KEY`,
-`CPA_MANAGEMENT_KEY`, `CPA_BIN`, `CPA_CONFIG`, `CPA_REFRESH_INTERVAL_MS`.
+`CPA_MANAGEMENT_KEY`, `CPA_BIN`, `CPA_CONFIG`, `CPA_SETTINGS`,
+`CPA_REFRESH_INTERVAL_MS`.
