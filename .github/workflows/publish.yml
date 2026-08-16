@@ -6,7 +6,7 @@ on:
             - "v*"
 
 permissions:
-    contents: read
+    contents: write
     id-token: write
 
 jobs:
@@ -26,3 +26,11 @@ jobs:
             - run: npm test
 
             - run: npm publish --access public
+
+            - name: Create GitHub Release
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+                      gh release create "$GITHUB_REF_NAME" --generate-notes
+                  fi
