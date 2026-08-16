@@ -30,7 +30,10 @@
     "README.en.md"
   ],
   "scripts": {
-    "check": "node --check src/index.js && node --check src/core/config.js && node --check src/core/adapter.js && node --check src/core/services.js && node --check src/server/management.js && node --check src/server/quota.js && node --check src/server/runtime.js && node --check src/client.js",
+    "check": "tsc --noEmit && oxlint",
+    "build": "tsc",
+    "prepack": "npm run build",
+    "pretest": "npm run build",
     "test": "node --test test.js"
   },
   "peerDependencies": {
@@ -50,5 +53,12 @@
       ],
       "platform": "web"
     }
+  },
+  "devDependencies": {
+    "@oxlint/plugins": "^1.78.0",
+    "@types/node": "^26.2.0",
+    "@types/react": "^18.3.31",
+    "oxlint": "^1.78.0",
+    "typescript": "^7.0.2"
   }
 }

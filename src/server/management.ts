@@ -1,6 +1,14 @@
 import { createHash } from 'node:crypto'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
+import type { CpaMode } from '../core/config.js'
+import { isFunction, isJsonRecord, isString } from '../core/json.js'
+import type { JsonRecord, JsonValue } from '../core/json.js'
+import type { ExecutionRecord } from '../core/services.js'
 import { emptyCpaSummary } from './data.js'
+import type { CpaSummary } from './data.js'
+import { optionValue } from './quota.js'
+import type { CpaQuotaStatus, OptionSource } from './quota.js'
 
 export const STATUS_PATH = '/dsh-cpa/status'
 export const SUMMARY_PATH = '/dsh-cpa/summary'
@@ -11,7 +19,7 @@ export const EXECUTION_STATUS_PATH = '/dsh-cpa/execution-status'
 const COOKIE_NAME = 'dsh_cpa_mgmt'
 const PANEL_TIMEOUT_MS = 5_000
 const PROXY_TIMEOUT_MS = 30_000
-const HOP_BY_HOP_HEADERS = new Set([
+const HOP_BY_HOP_HEADERS = new Set<string>([
   'connection',
   'content-length',
   'content-encoding',
@@ -26,15 +34,74 @@ const HOP_BY_HOP_HEADERS = new Set([
   'upgrade',
 ])
 
-export function cpaRoot(baseURL) {
+export interface CpaControllerState {
+  mode: CpaMode
+  active: boolean
+  activeUrl: string
+  internalRunning: boolean
+  externalRunning: boolean
+  managementAvailable: boolean
+  external: {
+    url: string
+    apiKeySet: boolean
+    managementKeySet: boolean
+  }
+  bin: string
+  usageStatisticsEnabled: boolean
+  refreshIntervalMs: number
+  port: number
+  configPath: string
+  settingsPath: string
+  executionsPath: string
+  authFilesTtlMs: number
+  quotaTtlMs: number
+  quotaConcurrency: number
+  error: string
+}
+
+export interface ManagementExecutionStore {
+  latest(sessionId: string | undefined): ExecutionRecord | undefined
+}
+
+export interface ManagementPanelOptions {
+  baseURL: OptionSource<string>
+  managementKey: OptionSource<string>
+  getState?: () => CpaControllerState
+  update?: (patch: JsonRecord) => Promise<CpaControllerState>
+  executionStore?: ManagementExecutionStore | (() => ManagementExecutionStore)
+  quotaService?: { status(): Promise<CpaQuotaStatus> }
+  dataService?: { summary(): Promise<CpaSummary> }
+}
+
+export interface ManagementContext {
+  get<T>(key: string): T | undefined
+  logger?: { warn?: (message: string | Error) => void }
+}
+
+interface StatusBody {
+  available: boolean
+  state?: CpaControllerState
+}
+
+interface WebRoute {
+  kind: 'exact' | 'prefix'
+  path: string
+  handler(req: IncomingMessage, res: ServerResponse): void | Promise<void>
+}
+
+interface WebServer {
+  register(route: WebRoute): () => void
+}
+
+export function cpaRoot(baseURL: string): string {
   return String(baseURL).replace(/\/+$/, '').replace(/\/v1$/, '')
 }
 
-export function managementCookieValue(managementKey) {
+export function managementCookieValue(managementKey: string): string {
   return createHash('sha256').update(`dsh-cpa:${managementKey}`).digest('hex')
 }
 
-function cookieValue(header, name) {
+function cookieValue(header: string | undefined, name: string): string | undefined {
   if (!header) return undefined
   for (const part of header.split(';')) {
     const separator = part.indexOf('=')
@@ -46,7 +113,7 @@ function cookieValue(header, name) {
   return undefined
 }
 
-function sendJson(res, status, value) {
+function sendJson<T>(res: ServerResponse, status: number, value: T): void {
   const body = JSON.stringify(value)
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
@@ -56,7 +123,7 @@ function sendJson(res, status, value) {
   res.end(body)
 }
 
-function panelScript() {
+function panelScript(): string {
   return [
     '<script>',
     'try {',
@@ -69,7 +136,7 @@ function panelScript() {
   ].join('\n')
 }
 
-export function injectPanelScript(html) {
+export function injectPanelScript(html: string): string {
   const script = panelScript()
   const headEnd = html.indexOf('</head>')
   if (headEnd !== -1) return `${html.slice(0, headEnd)}${script}\n${html.slice(headEnd)}`
@@ -78,7 +145,7 @@ export function injectPanelScript(html) {
   return `${script}\n${html}`
 }
 
-function setManagementCookie(res, managementKey) {
+function setManagementCookie(res: ServerResponse, managementKey: string): void {
   res.setHeader('Set-Cookie', [
     `${COOKIE_NAME}=${managementCookieValue(managementKey)}`,
     'HttpOnly',
@@ -88,27 +155,31 @@ function setManagementCookie(res, managementKey) {
   ].join('; '))
 }
 
-function readRequestBody(req) {
+function readRequestBody(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const chunks = []
-    req.on('data', chunk => { chunks.push(chunk) })
-    req.on('end', () => { resolve(Buffer.concat(chunks)) })
+    const chunks: Buffer[] = []
+    req.on('data', chunk => {
+      chunks.push(chunk)
+    })
+    req.on('end', () => {
+      resolve(Buffer.concat(chunks))
+    })
     req.on('error', reject)
   })
 }
 
-function requestHeaders(req, managementKey) {
-  const headers = {}
+function requestHeaders(req: IncomingMessage, managementKey: string) {
+  const headers: Record<string, string> = {}
   for (const [name, value] of Object.entries(req.headers)) {
     if (HOP_BY_HOP_HEADERS.has(name) || name === 'authorization' || name === 'cookie') continue
-    headers[name] = value
+    if (isString(value)) headers[name] = value
   }
   headers.authorization = `Bearer ${managementKey}`
   return headers
 }
 
-function responseHeaders(response) {
-  const headers = {}
+function responseHeaders(response: Response) {
+  const headers: Record<string, string> = {}
   for (const [name, value] of response.headers) {
     const lower = name.toLowerCase()
     if (HOP_BY_HOP_HEADERS.has(lower) || lower === 'set-cookie') continue
@@ -117,18 +188,14 @@ function responseHeaders(response) {
   return headers
 }
 
-function optionValue(options, key) {
-  return typeof options[key] === 'function' ? options[key]() : options[key]
-}
-
-async function servePanel(options, res) {
-  const baseURL = optionValue(options, 'baseURL')
-  const managementKey = optionValue(options, 'managementKey')
+async function servePanel(options: ManagementPanelOptions, res: ServerResponse): Promise<void> {
+  const baseURL = optionValue(options.baseURL) ?? ''
+  const managementKey = optionValue(options.managementKey)
   if (!managementKey) {
     sendJson(res, 503, { available: false })
     return
   }
-  let response
+  let response: Response
   try {
     response = await fetch(`${cpaRoot(baseURL)}/management.html`, {
       headers: { accept: 'text/html' },
@@ -152,9 +219,14 @@ async function servePanel(options, res) {
   res.end(injectPanelScript(html))
 }
 
-async function proxyManagement(options, url, req, res) {
-  const baseURL = optionValue(options, 'baseURL')
-  const managementKey = optionValue(options, 'managementKey')
+async function proxyManagement(
+  options: ManagementPanelOptions,
+  url: URL,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const baseURL = optionValue(options.baseURL) ?? ''
+  const managementKey = optionValue(options.managementKey)
   if (!managementKey) {
     sendJson(res, 503, { available: false })
     return
@@ -172,14 +244,15 @@ async function proxyManagement(options, url, req, res) {
   const target = `${cpaRoot(baseURL)}${targetPath}${url.search}`
   const body = await readRequestBody(req)
   const headers = requestHeaders(req, managementKey)
-  let response
+  const requestOptions: RequestInit = {
+    method: req.method,
+    headers,
+    signal: AbortSignal.timeout(PROXY_TIMEOUT_MS),
+  }
+  if (body.length > 0) requestOptions.body = body
+  let response: Response
   try {
-    response = await fetch(target, {
-      method: req.method,
-      headers,
-      ...body.length === 0 ? {} : { body },
-      signal: AbortSignal.timeout(PROXY_TIMEOUT_MS),
-    })
+    response = await fetch(target, requestOptions)
   } catch {
     sendJson(res, 502, { error: 'unavailable' })
     return
@@ -191,30 +264,33 @@ async function proxyManagement(options, url, req, res) {
     return
   }
   const stream = Readable.fromWeb(response.body)
-  stream.on('error', () => { res.destroy() })
+  stream.on('error', () => {
+    res.destroy()
+  })
   stream.pipe(res)
 }
 
-function statusHandler(options) {
-  return async (_req, res) => {
-    const managementKey = optionValue(options, 'managementKey')
-    sendJson(res, 200, {
+function statusHandler(options: ManagementPanelOptions) {
+  return async (_req: IncomingMessage, res: ServerResponse) => {
+    const managementKey = optionValue(options.managementKey)
+    const body: StatusBody = {
       available: Boolean(managementKey),
-      ...options.getState ? { state: options.getState() } : {},
-    })
+    }
+    if (options.getState !== undefined) body.state = options.getState()
+    sendJson(res, 200, body)
   }
 }
 
-function executionStatusHandler(options) {
-  return async (req, res) => {
-    const managementKey = optionValue(options, 'managementKey')
+function executionStatusHandler(options: ManagementPanelOptions) {
+  return async (req: IncomingMessage, res: ServerResponse) => {
+    const managementKey = optionValue(options.managementKey)
     if (!managementKey) {
       sendJson(res, 200, { available: false, accounts: [], quota: {}, execution: null })
       return
     }
     const url = new URL(req.url ?? '/', 'http://localhost')
     const sessionId = url.searchParams.get('sessionId') ?? undefined
-    let quota = { accounts: [], quota: {} }
+    let quota: CpaQuotaStatus = { accounts: [], quota: {} }
     try {
       if (options.quotaService) {
         quota = await options.quotaService.status()
@@ -222,9 +298,9 @@ function executionStatusHandler(options) {
     } catch {
       // Quota is best-effort; keep the execution readout available.
     }
-    let execution
+    let execution: ExecutionRecord | null = null
     try {
-      const executionStore = typeof options.executionStore === 'function'
+      const executionStore = isFunction(options.executionStore)
         ? options.executionStore()
         : options.executionStore
       execution = executionStore?.latest(sessionId) ?? null
@@ -235,30 +311,36 @@ function executionStatusHandler(options) {
       available: true,
       accounts: quota.accounts,
       quota: quota.quota,
-      execution: execution ?? null,
+      execution,
     })
   }
 }
 
-function summaryHandler(options) {
-  return async (_req, res) => {
-    if (!optionValue(options, 'managementKey')) {
+function summaryHandler(options: ManagementPanelOptions) {
+  return async (_req: IncomingMessage, res: ServerResponse) => {
+    if (!optionValue(options.managementKey)) {
       sendJson(res, 200, emptyCpaSummary({ available: false }))
       return
     }
     try {
-      sendJson(res, 200, await options.dataService?.summary() ?? emptyCpaSummary({ available: true }))
+      const summary = options.dataService
+        ? await options.dataService.summary()
+        : emptyCpaSummary({ available: true })
+      sendJson(res, 200, summary)
     } catch (error) {
       sendJson(res, 200, emptyCpaSummary({
         available: true,
-        errors: [{ source: 'summary', message: error?.message || String(error) }],
+        errors: [{
+          source: 'summary',
+          message: error instanceof Error ? error.message : String(error),
+        }],
       }))
     }
   }
 }
 
-function settingsHandler(options) {
-  return async (req, res) => {
+function settingsHandler(options: ManagementPanelOptions) {
+  return async (req: IncomingMessage, res: ServerResponse) => {
     if (req.method === 'GET') {
       sendJson(res, 200, options.getState ? options.getState() : { available: false })
       return
@@ -267,21 +349,21 @@ function settingsHandler(options) {
       sendJson(res, 405, { error: 'method not allowed' })
       return
     }
-    let patch
-    let body
+    let body: Buffer
     try {
       body = await readRequestBody(req)
     } catch {
       sendJson(res, 400, { error: 'invalid body' })
       return
     }
+    let patch: JsonValue
     try {
       patch = body.length === 0 ? {} : JSON.parse(body.toString())
     } catch {
       sendJson(res, 400, { error: 'invalid JSON' })
       return
     }
-    if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) {
+    if (!isJsonRecord(patch)) {
       sendJson(res, 400, { error: 'invalid body' })
       return
     }
@@ -292,13 +374,13 @@ function settingsHandler(options) {
     try {
       sendJson(res, 200, await options.update(patch))
     } catch (error) {
-      sendJson(res, 400, { error: error?.message || String(error) })
+      sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
     }
   }
 }
 
-function panelHandler(options) {
-  return async (req, res) => {
+function panelHandler(options: ManagementPanelOptions) {
+  return async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
     if (url.pathname === PANEL_PATH) {
       await servePanel(options, res)
@@ -313,14 +395,17 @@ function panelHandler(options) {
   }
 }
 
-export function installManagementPanelWhenReady(ctx, options) {
-  const disposers = []
-  let timer
+export function installManagementPanelWhenReady(
+  ctx: ManagementContext,
+  options: ManagementPanelOptions,
+): () => void {
+  const disposers: Array<() => void> = []
+  let timer: ReturnType<typeof setInterval> | undefined
   let installed = false
 
   const register = () => {
     if (installed) return
-    const server = ctx.get('webServer')
+    const server = ctx.get<WebServer>('webServer')
     if (server === undefined) return
     installed = true
     disposers.push(server.register({
@@ -354,19 +439,21 @@ export function installManagementPanelWhenReady(ctx, options) {
   try {
     register()
   } catch (error) {
-    ctx.logger?.warn?.(error)
+    ctx.logger?.warn?.(error instanceof Error ? error : String(error))
   }
   if (!installed) {
     timer = setInterval(() => {
       try {
         register()
       } catch (error) {
-        ctx.logger?.warn?.(error)
+        ctx.logger?.warn?.(error instanceof Error ? error : String(error))
         if (timer !== undefined) clearInterval(timer)
       }
     }, 250)
     timer.unref?.()
-    disposers.push(() => { if (timer !== undefined) clearInterval(timer) })
+    disposers.push(() => {
+      if (timer !== undefined) clearInterval(timer)
+    })
   }
 
   return () => {

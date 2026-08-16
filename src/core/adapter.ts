@@ -11,13 +11,142 @@ import {
   ProviderRequestId,
   ReasoningEffortId,
 } from '@deepseek-ai/dsh-llm'
-
+import type {
+  ContentBlock,
+  FinishReason,
+  GenerateOptions,
+  LlmErrorOptions,
+  LlmModelInfo,
+  LlmModelReasoningInfo,
+  LlmProviderInfo,
+  LlmReasoningEffortInfo,
+  LlmResolvedModelInfo,
+  Message,
+  StreamChunk,
+  TokenUsage,
+  ToolCallBlock,
+  ToolResultBlock,
+  ToolSchema,
+} from '@deepseek-ai/dsh-llm'
 import { chatCompletionsUrl } from './config.js'
+import type { CpaModel } from './config.js'
+import { isFunction, isJsonRecord, isNonEmptyString, isString } from './json.js'
 
 const DONE = '[DONE]'
 const EMPTY_RESPONSE = EMPTY_RESPONSE_CODE
 
-function providerRetryAfterMs(value) {
+export interface CpaTrace {
+  traceId: string
+  authIndex: string
+  requestId: ProviderRequestId
+}
+
+export interface CpaExecutionEvent {
+  authIndex: string
+  traceId: string
+  requestId: ProviderRequestId
+  sessionId?: GenerateOptions['sessionId']
+  provider: string
+  model: string
+  purpose?: GenerateOptions['purpose']
+  outcome: 'success' | 'failure'
+  inputTokens?: number
+  outputTokens?: number
+}
+
+export interface CpaAdapterOptions {
+  baseURL: string
+  provider: string
+  defaultContextWindow: number
+  defaultMaxTokens: number
+  getModels: () => CpaModel[]
+  resolveApiKey: () => Promise<string>
+  onExecution?: (execution: CpaExecutionEvent) => void | Promise<void>
+}
+
+export interface WireToolCall {
+  id: string
+  type: 'function'
+  function: { name: string; arguments: string }
+}
+
+export interface WireMessage {
+  role: string
+  content: string
+  tool_calls?: WireToolCall[]
+  tool_call_id?: CallId
+}
+
+export interface WireTool {
+  type: 'function'
+  function: { name: string; description: string; parameters: ToolSchema['parameters'] }
+}
+
+export interface WireRequest {
+  model: string
+  messages: WireMessage[]
+  stream: boolean
+  tools?: WireTool[]
+  reasoning_effort?: string
+  temperature?: number
+  max_tokens?: number
+  stop?: string[]
+}
+
+interface WireUsage {
+  prompt_tokens: number
+  completion_tokens: number
+  prompt_tokens_details?: { cached_tokens?: number }
+  prompt_cache_hit_tokens?: number
+  completion_tokens_details?: { reasoning_tokens?: number }
+}
+
+interface WireToolCallDelta {
+  index?: number
+  id?: string
+  function?: { name?: string; arguments?: string }
+}
+
+interface WireDelta {
+  content?: unknown
+  reasoning_content?: unknown
+  reasoning?: { content?: unknown }
+  tool_calls?: WireToolCallDelta[]
+}
+
+interface WireChoice {
+  delta?: WireDelta
+  finish_reason?: unknown
+}
+
+interface WireChunk {
+  choices?: WireChoice[]
+  usage?: WireUsage
+}
+
+type BlockKind = 'text' | 'reasoning' | 'tool-call'
+
+interface Block {
+  index: number
+  kind: BlockKind
+  text: string
+  callId?: string
+  name?: string
+}
+
+export interface CredentialHit {
+  value: string
+}
+
+export interface CredentialsService {
+  resolve(ref: string): Promise<CredentialHit | undefined>
+}
+
+export interface ApiKeyContext {
+  get<T>(key: string): T | undefined
+}
+
+function providerRetryAfterMs(value: string | null): number | undefined {
   if (value === null) return undefined
   if (/^\d+$/.test(value)) {
     const delay = Number(value) * 1000
@@ -27,15 +156,15 @@ function providerRetryAfterMs(value) {
   return Number.isFinite(delay) && delay > 0 ? delay : undefined
 }
 
-function requestId(headers) {
+function requestId(headers: Headers): ProviderRequestId | undefined {
   const value = headers.get('x-request-id')
     ?? headers.get('x-cpa-request-id')
     ?? headers.get('x-cli-proxy-request-id')
   return value === null || value.length === 0 ? undefined : ProviderRequestId(value)
 }
 
-export function parseCpaTraceId(value) {
-  if (typeof value !== 'string') return undefined
+export function parseCpaTraceId(value: string | undefined): CpaTrace | undefined {
+  if (!isString(value)) return undefined
   const trimmed = value.trim()
   if (trimmed.length <= 15) return undefined
   const separator = trimmed.indexOf('-', 14)
@@ -53,15 +182,15 @@ export function parseCpaTraceId(value) {
   }
 }
 
-function cpaTrace(headers) {
-  return parseCpaTraceId(headers.get('x-cpa-trace-id'))
+function cpaTrace(headers: Headers): CpaTrace | undefined {
+  return parseCpaTraceId(headers.get('x-cpa-trace-id') ?? undefined)
 }
 
-function responseRequestId(headers) {
+function responseRequestId(headers: Headers): ProviderRequestId | undefined {
   return requestId(headers) ?? cpaTrace(headers)?.requestId
 }
 
-function httpErrorCode(status, detail) {
+function httpErrorCode(status: number, detail: string): string {
   if (status === 401 || status === 403) return 'AUTH'
   if (isQuotaExceededError(detail)) return 'QUOTA'
   if (status === 429) return 'RATE_LIMIT'
@@ -73,66 +202,48 @@ function httpErrorCode(status, detail) {
   return `HTTP_${status}`
 }
 
-function modelInfo(provider, model) {
+function modelInfo(provider: string, model: CpaModel): LlmModelInfo {
   const name = model.displayName ?? model.id
-  const description = model.id === name ? undefined : model.id
-  return {
+  const info: LlmModelInfo = {
     provider,
     id: model.id,
     name,
-    ...description === undefined ? {} : { description },
     inputModalities: ['text'],
   }
+  if (model.id !== name) info.description = model.id
+  return info
 }
 
-function modelReasoningInfo(model) {
-  const reasoning = model?.reasoning
-  if (reasoning === undefined) return {}
-  return {
-    reasoning: {
-      efforts: reasoning.efforts.map(effort => ({
-        id: ReasoningEffortId(effort.id),
-        name: effort.name,
-        ...effort.description === undefined ? {} : { description: effort.description },
-      })),
-      ...reasoning.defaultEffort === undefined
-        ? {}
-        : { defaultEffort: ReasoningEffortId(reasoning.defaultEffort) },
-    },
+function flattenText(blocks: readonly ContentBlock[]): string {
+  let text = ''
+  for (const block of blocks) {
+    if (block.type === 'text') text += block.text
   }
+  return text
 }
 
-function flattenText(blocks) {
-  return blocks
-    .filter(block => block.type === 'text')
-    .map(block => block.text)
-    .join('')
-}
-
-function assertTextOnly(blocks) {
+function assertTextOnly(blocks: readonly ContentBlock[]): void {
   if (contentHasImage(blocks)) {
     throw new LlmError('CPA does not support images', 'UNSUPPORTED_CONTENT')
   }
 }
 
-function serializeAssistant(message) {
+function serializeAssistant(message: Message): WireMessage {
   const text = flattenText(message.content)
-  const toolCalls = message.content
-    .filter(block => block.type === 'tool-call')
+  const toolCalls: WireToolCall[] = message.content
+    .filter((block): block is ToolCallBlock => block.type === 'tool-call')
     .map(block => ({
       id: block.id,
-      type: 'function',
+      type: 'function' as const,
       function: { name: block.name, arguments: block.arguments },
     }))
-  return {
-    role: 'assistant',
-    content: text,
-    ...toolCalls.length > 0 ? { tool_calls: toolCalls } : {},
-  }
+  const wire: WireMessage = { role: 'assistant', content: text }
+  if (toolCalls.length > 0) wire.tool_calls = toolCalls
+  return wire
 }
 
-export function serializeMessages(messages) {
-  const wire = []
+export function serializeMessages(messages: readonly Message[]): WireMessage[] {
+  const wire: WireMessage[] = []
   for (const message of messages) {
     assertTextOnly(message.content)
     if (message.role === 'system') {
@@ -143,7 +254,7 @@ export function serializeMessages(messages) {
       wire.push(serializeAssistant(message))
       continue
     }
-    const toolResults = message.content.filter(block => block.type === 'tool-result')
+    const toolResults = message.content.filter((block): block is ToolResultBlock => block.type === 'tool-result')
     const text = flattenText(message.content)
     if (text.length > 0 || toolResults.length === 0) {
       wire.push({ role: 'user', content: text })
@@ -159,38 +270,39 @@ export function serializeMessages(messages) {
   return wire
 }
 
-export function serializeRequest(options) {
-  const messages = []
+export function serializeRequest(options: GenerateOptions): WireRequest {
+  const messages: WireMessage[] = []
   if (options.system !== undefined) {
     messages.push({ role: 'system', content: options.system })
   }
   messages.push(...serializeMessages(options.messages))
+  const request: WireRequest = {
+    model: options.model,
+    messages,
+    stream: true,
+  }
   const tools = options.tools?.map(tool => ({
-    type: 'function',
+    type: 'function' as const,
     function: {
       name: tool.name,
       description: tool.description,
       parameters: tool.parameters,
     },
   }))
-  return {
-    model: options.model,
-    messages,
-    stream: true,
-    ...tools !== undefined && tools.length > 0 ? { tools } : {},
-    ...options.reasoningEffort !== undefined ? { reasoning_effort: options.reasoningEffort } : {},
-    ...options.temperature !== undefined ? { temperature: options.temperature } : {},
-    ...options.maxTokens === undefined ? {} : { max_tokens: options.maxTokens },
-    ...options.stop !== undefined ? { stop: options.stop } : {},
-  }
+  if (tools !== undefined && tools.length > 0) request.tools = tools
+  if (options.reasoningEffort !== undefined) request.reasoning_effort = options.reasoningEffort
+  if (options.temperature !== undefined) request.temperature = options.temperature
+  if (options.maxTokens !== undefined) request.max_tokens = options.maxTokens
+  if (options.stop !== undefined) request.stop = options.stop
+  return request
 }
 
-async function* ssePayloads(stream) {
+async function* ssePayloads(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
   const reader = stream.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
-  let data = []
-  const flush = () => {
+  let data: string[] = []
+  const flush = (): string | undefined => {
     if (data.length === 0) return undefined
     const payload = data.join('\n')
     data = []
@@ -200,7 +312,7 @@ async function* ssePayloads(stream) {
     const { done, value } = await reader.read()
     if (done) break
     buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
-    let newline
+    let newline: number
     while ((newline = buffer.indexOf('\n')) !== -1) {
       const line = buffer.slice(0, newline)
       buffer = buffer.slice(newline + 1)
@@ -219,7 +331,7 @@ async function* ssePayloads(stream) {
   if (payload !== undefined) yield payload
 }
 
-export async function* parseSse(stream) {
+export async function* parseSse(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
   let done = false
   for await (const payload of ssePayloads(stream)) {
     if (payload === DONE) {
@@ -234,7 +346,7 @@ export async function* parseSse(stream) {
   }
 }
 
-function mapFinishReason(reason) {
+function mapFinishReason(reason: string): FinishReason {
   switch (reason) {
     case 'stop': return { kind: 'stop' }
     case 'tool_calls': return { kind: 'tool-calls' }
@@ -247,18 +359,19 @@ function mapFinishReason(reason) {
   }
 }
 
-function mapUsage(usage) {
+function mapUsage(usage: WireUsage): TokenUsage {
   const cacheRead = usage.prompt_tokens_details?.cached_tokens ?? usage.prompt_cache_hit_tokens
   const reasoning = usage.completion_tokens_details?.reasoning_tokens
-  return {
+  const mapped: TokenUsage = {
     inputTokens: usage.prompt_tokens - (cacheRead ?? 0),
     outputTokens: usage.completion_tokens,
-    ...cacheRead !== undefined ? { cacheReadTokens: cacheRead } : {},
-    ...reasoning !== undefined ? { reasoningTokens: reasoning } : {},
   }
+  if (cacheRead !== undefined) mapped.cacheReadTokens = cacheRead
+  if (reasoning !== undefined) mapped.reasoningTokens = reasoning
+  return mapped
 }
 
-function closeBlock(block) {
+function closeBlock(block: Block): ContentBlock {
   switch (block.kind) {
     case 'text': return { type: 'text', text: block.text }
     case 'reasoning': return { type: 'reasoning', text: block.text }
@@ -271,17 +384,18 @@ function closeBlock(block) {
   }
 }
 
-export async function* translate(payloads) {
+export async function* translate(payloads: AsyncIterable<string>): AsyncGenerator<StreamChunk> {
   let nextIndex = 0
-  let textBlock
-  let reasoningBlock
-  const toolBlocks = new Map()
-  const order = []
-  let pendingFinish
-  let pendingUsage
+  let textBlock: Block | undefined
+  let reasoningBlock: Block | undefined
+  const toolBlocks = new Map<number, Block>()
+  const order: Block[] = []
+  let pendingFinish: FinishReason | undefined
+  let pendingUsage: TokenUsage | undefined
 
-  function open(kind) {
-    const block = { index: nextIndex++, kind, text: '' }
+  const open = (kind: BlockKind): Block => {
+    const block: Block = { index: nextIndex, kind, text: '' }
+    nextIndex += 1
     order.push(block)
     return block
   }
@@ -297,15 +411,15 @@ export async function* translate(payloads) {
         type: 'finish',
         reason: reason.kind === 'stop' && order.length === 0
           ? {
-            kind: 'error',
-            failure: { message: 'empty response', code: EMPTY_RESPONSE },
-          }
+              kind: 'error',
+              failure: { message: 'empty response', code: EMPTY_RESPONSE },
+            }
           : reason,
       }
       return
     }
 
-    let chunk
+    let chunk: WireChunk
     try {
       chunk = JSON.parse(payload)
     } catch {
@@ -314,12 +428,12 @@ export async function* translate(payloads) {
 
     for (const choice of chunk.choices ?? []) {
       const delta = choice.delta ?? {}
-      const reasoning = typeof delta.reasoning_content === 'string'
+      const reasoning = isString(delta.reasoning_content)
         ? delta.reasoning_content
-        : typeof delta.reasoning?.content === 'string'
+        : isString(delta.reasoning?.content)
           ? delta.reasoning.content
           : undefined
-      if (typeof reasoning === 'string' && reasoning.length > 0) {
+      if (isNonEmptyString(reasoning)) {
         if (!reasoningBlock) {
           reasoningBlock = open('reasoning')
           yield { type: 'block-start', index: reasoningBlock.index, blockType: 'reasoning' }
@@ -329,7 +443,7 @@ export async function* translate(payloads) {
       }
 
       const content = delta.content
-      if (typeof content === 'string' && content.length > 0) {
+      if (isNonEmptyString(content)) {
         if (!textBlock) {
           textBlock = open('text')
           yield { type: 'block-start', index: textBlock.index, blockType: 'text' }
@@ -350,16 +464,17 @@ export async function* translate(payloads) {
         if (call.function?.name !== undefined) block.name = call.function.name
         const fragment = call.function?.arguments ?? ''
         block.text += fragment
-        yield {
+        const deltaEvent: StreamChunk = {
           type: 'tool-call-delta',
           index: block.index,
           id: CallId(block.callId ?? ''),
-          ...block.name !== undefined ? { name: block.name } : {},
           argumentsDelta: fragment,
         }
+        if (block.name !== undefined) deltaEvent.name = block.name
+        yield deltaEvent
       }
 
-      if (typeof choice.finish_reason === 'string') {
+      if (isString(choice.finish_reason)) {
         pendingFinish = mapFinishReason(choice.finish_reason)
       }
     }
@@ -370,62 +485,76 @@ export async function* translate(payloads) {
   throw new LlmError('stream ended without [DONE]', 'STREAM_CLOSED')
 }
 
-async function readError(response) {
+async function readError(response: Response): Promise<never> {
   let message = `CPA HTTP ${response.status}`
   let detail = ''
   try {
-    const parsed = await response.json()
-    const error = parsed?.error
-    message = typeof error?.message === 'string' && error.message.length > 0
+    const body: unknown = await response.json()
+    const parsed = isJsonRecord(body) ? body : null
+    const error = isJsonRecord(parsed?.error) ? parsed.error : null
+    message = isNonEmptyString(error?.message)
       ? error.message
-      : typeof parsed?.message === 'string' && parsed.message.length > 0
+      : isNonEmptyString(parsed?.message)
         ? parsed.message
         : message
-    detail = [error?.code, error?.type, error?.message, parsed?.message].filter(Boolean).join(' ')
+    detail = [error?.code, error?.type, error?.message, parsed?.message]
+      .filter((value): value is string => isString(value))
+      .join(' ')
   } catch {
-    // Keep HTTP status for malformed error bodies.
+    // Keep the HTTP status line for malformed error bodies.
   }
   const delay = providerRetryAfterMs(response.headers.get('retry-after'))
   const trace = cpaTrace(response.headers)
   const id = responseRequestId(response.headers)
-  throw new LlmError(message, httpErrorCode(response.status, detail), {
-    status: response.status,
-    ...delay === undefined ? {} : { providerRetryAfterMs: delay },
-    ...id === undefined ? {} : { requestId: id },
-    ...trace === undefined ? {} : { authIndex: trace.authIndex },
-  })
+  const options: LlmErrorOptions & { authIndex?: string } = { status: response.status }
+  if (delay !== undefined) options.providerRetryAfterMs = delay
+  if (id !== undefined) options.requestId = id
+  if (trace !== undefined) options.authIndex = trace.authIndex
+  throw new LlmError(message, httpErrorCode(response.status, detail), options)
 }
 
 export class CpaAdapter extends LlmAdapter {
-  constructor(options) {
+  constructor(readonly options: CpaAdapterOptions) {
     super()
-    this.options = options
   }
 
-  providerInfo(provider) {
+  override providerInfo(provider: string): LlmProviderInfo {
     return { id: provider, name: 'CLI Proxy API' }
   }
 
-  listModels(provider) {
+  override listModels(provider: string): Promise<readonly LlmModelInfo[]> {
     return Promise.resolve(this.options.getModels().map(model => modelInfo(provider, model)))
   }
 
-  resolveModel(provider, model, _signal) {
+  override resolveModel(provider: string, model: string, _signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
     const configured = this.options.getModels().find(entry => entry.id === model)
-    return Promise.resolve({
-      ...configured === undefined
-        ? { provider, id: model, name: model }
-        : modelInfo(provider, configured),
-      inputModalities: ['text'],
-      context: {
-        contextWindow: configured?.contextLength ?? this.options.defaultContextWindow,
-      },
-      defaultMaxTokens: configured?.maxCompletionTokens ?? this.options.defaultMaxTokens,
-      ...modelReasoningInfo(configured),
-    })
+    const resolved: LlmResolvedModelInfo = configured === undefined
+      ? { provider, id: model, name: model, inputModalities: ['text'] }
+      : modelInfo(provider, configured)
+    resolved.context = {
+      contextWindow: configured?.contextLength ?? this.options.defaultContextWindow,
+    }
+    resolved.defaultMaxTokens = configured?.maxCompletionTokens ?? this.options.defaultMaxTokens
+    const reasoning = configured?.reasoning
+    if (reasoning !== undefined) {
+      const efforts: LlmReasoningEffortInfo[] = reasoning.efforts.map(effort => {
+        const info: LlmReasoningEffortInfo = {
+          id: ReasoningEffortId(effort.id),
+          name: effort.name,
+        }
+        if (effort.description !== undefined) info.description = effort.description
+        return info
+      })
+      const reasoningInfo: LlmModelReasoningInfo = { efforts }
+      if (reasoning.defaultEffort !== undefined) {
+        reasoningInfo.defaultEffort = ReasoningEffortId(reasoning.defaultEffort)
+      }
+      resolved.reasoning = reasoningInfo
+    }
+    return Promise.resolve(resolved)
   }
 
-  async * stream(options) {
+  override async * stream(options: GenerateOptions): AsyncGenerator<StreamChunk> {
     const apiKey = await this.options.resolveApiKey()
     const url = chatCompletionsUrl(this.options.baseURL)
     const body = serializeRequest(options)
@@ -437,7 +566,7 @@ export class CpaAdapter extends LlmAdapter {
       ...attributionHeaders(),
     }
 
-    let response
+    let response: Response
     try {
       response = await fetch(url, {
         method: 'POST',
@@ -454,7 +583,7 @@ export class CpaAdapter extends LlmAdapter {
 
     if (!response.ok) {
       const trace = cpaTrace(response.headers)
-      if (trace !== undefined && typeof this.options.onExecution === 'function') {
+      if (trace !== undefined && this.options.onExecution !== undefined) {
         await this.options.onExecution({
           authIndex: trace.authIndex,
           traceId: trace.traceId,
@@ -474,7 +603,7 @@ export class CpaAdapter extends LlmAdapter {
     }
 
     const trace = cpaTrace(response.headers)
-    let executionUsage
+    let executionUsage: TokenUsage | undefined
     let completed = false
     try {
       for await (const event of translate(parseSse(response.body))) {
@@ -483,8 +612,8 @@ export class CpaAdapter extends LlmAdapter {
       }
       completed = true
     } finally {
-      if (trace !== undefined && typeof this.options.onExecution === 'function') {
-        await this.options.onExecution({
+      if (trace !== undefined && this.options.onExecution !== undefined) {
+        const execution: CpaExecutionEvent = {
           authIndex: trace.authIndex,
           traceId: trace.traceId,
           requestId: trace.requestId,
@@ -493,25 +622,28 @@ export class CpaAdapter extends LlmAdapter {
           model: options.model,
           purpose: options.purpose,
           outcome: completed ? 'success' : 'failure',
-          ...executionUsage === undefined
-            ? {}
-            : {
-                inputTokens: executionUsage.inputTokens,
-                outputTokens: executionUsage.outputTokens,
-              },
-        })
+        }
+        if (executionUsage !== undefined) {
+          execution.inputTokens = executionUsage.inputTokens
+          execution.outputTokens = executionUsage.outputTokens
+        }
+        await this.options.onExecution(execution)
       }
     }
   }
 }
 
-export function resolveApiKey(ctx, ref, provided) {
+export function resolveApiKey(
+  ctx: ApiKeyContext,
+  ref: string,
+  provided: string | (() => Promise<string | undefined> | string | undefined),
+): () => Promise<string> {
   return async () => {
-    const configured = typeof provided === 'function' ? await provided() : provided
+    const configured = isFunction(provided) ? await provided() : provided
     if (configured !== undefined && configured !== null && configured !== '') {
       return assertUsableApiKey(configured, 'dsh-cpa', ref)
     }
-    const credentials = ctx.get('credentials')
+    const credentials = ctx.get<CredentialsService>('credentials')
     if (credentials !== undefined) {
       const hit = await credentials.resolve(ref)
       if (hit !== undefined) {
