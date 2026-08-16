@@ -1,5 +1,5 @@
-import { readCpaSettings, resolveOptions } from './config.js'
-import { CpaController, resolveInitialCpaSettings } from './runtime.js'
+import { readCpaSettings, resolveOptions } from './core/config.js'
+import { CpaController, resolveInitialCpaSettings } from './server/runtime.js'
 
 export const name = 'dsh-cpa'
 export const inject = ['llm']

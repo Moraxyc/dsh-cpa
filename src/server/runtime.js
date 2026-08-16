@@ -1,4 +1,4 @@
-import { CpaAdapter, resolveApiKey } from './adapter.js'
+import { CpaAdapter, resolveApiKey } from '../core/adapter.js'
 import {
   assertCpaBinary,
   DEFAULT_AUTH_FILES_TTL_MS,
@@ -14,7 +14,7 @@ import {
   waitForCpa,
   writeCpaSettings,
   writeManagedConfig,
-} from './config.js'
+} from '../core/config.js'
 import { installManagementPanelWhenReady } from './management.js'
 import { CpaQuotaService } from './quota.js'
 import {
@@ -22,7 +22,7 @@ import {
   CpaExecutionStore,
   sanitizeExecutionRecord,
   simpleProjectionSchema,
-} from './services.js'
+} from '../core/services.js'
 
 function internalBaseURL(options, port = options.port) {
   return `http://${options.host}:${port}/v1`

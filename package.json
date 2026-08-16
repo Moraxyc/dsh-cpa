@@ -2,21 +2,15 @@
   "name": "dsh-cpa",
   "version": "0.1.0",
   "type": "module",
-  "main": "index.js",
+  "main": "./src/index.js",
   "exports": {
-    ".": "./index.js",
-    "./client": "./client.js",
+    ".": "./src/index.js",
+    "./client": "./src/client.js",
+    "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
   "files": [
-    "index.js",
-    "management.js",
-    "runtime.js",
-    "client.js",
-    "adapter.js",
-    "config.js",
-    "quota.js",
-    "services.js",
+    "src/**/*.js",
     "cordis.patch.yml",
     "README.md",
     "README.en.md"
@@ -33,7 +27,7 @@
     }
   },
   "scripts": {
-    "check": "node --check index.js && node --check management.js && node --check runtime.js && node --check client.js && node --check adapter.js && node --check quota.js && node --check services.js && node --check config.js",
+    "check": "node --check src/index.js && node --check src/core/config.js && node --check src/core/adapter.js && node --check src/core/services.js && node --check src/server/management.js && node --check src/server/quota.js && node --check src/server/runtime.js && node --check src/client.js",
     "test": "node --test test.js"
   },
   "peerDependencies": {

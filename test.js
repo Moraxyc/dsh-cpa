@@ -18,11 +18,11 @@ import {
   resolveCpaBinary,
   sanitizeCpaSettings,
   writeCpaSettings,
-} from './config.js'
+} from './src/core/config.js'
 import {
   CpaAdapter,
   parseCpaTraceId,
-} from './adapter.js'
+} from './src/core/adapter.js'
 import {
   cpaRoot,
   EXECUTION_STATUS_PATH,
@@ -31,12 +31,12 @@ import {
   PANEL_PATH,
   SETTINGS_PATH,
   STATUS_PATH,
-} from './management.js'
+} from './src/server/management.js'
 import {
   cpaSettingsEqual,
   mergeCpaSettings,
   resolveInitialCpaSettings,
-} from './runtime.js'
+} from './src/server/runtime.js'
 import {
   CpaQuotaService,
   formatResetLabel,
@@ -44,13 +44,13 @@ import {
   normalizeGeminiWindows,
   normalizeQuotaReport,
   sanitizeAuthFiles,
-} from './quota.js'
+} from './src/server/quota.js'
 import {
   aggregateCpaUsage,
   CpaExecutionStore,
   sanitizeExecutionRecord,
   simpleProjectionSchema,
-} from './services.js'
+} from './src/core/services.js'
 
 const DEFAULT_ADVANCED_SETTINGS = Object.freeze({
   refreshIntervalMs: 300_000,
