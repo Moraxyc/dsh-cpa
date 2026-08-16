@@ -5,7 +5,21 @@
 CLI Proxy API（CPA）的 `dsh` bundle 插件。注册 `cpa` provider，请求走
 CPA 的 `/v1/chat/completions`，同步 `/v1/models` 模型列表。
 
-## 安装
+## 快速开始
+
+```sh
+npx @deepseek-ai/dsh plugin --profile web add dsh-cpa
+```
+
+headless profile 同理：
+
+```sh
+npx @deepseek-ai/dsh plugin --profile headless add dsh-cpa
+```
+
+## 从源码安装
+
+开发或本地构建时使用：
 
 ```sh
 npx @deepseek-ai/dsh plugin --profile web add .

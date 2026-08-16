@@ -6,7 +6,21 @@ A `dsh` bundle plugin for CLI Proxy API (CPA). It registers the `cpa`
 provider, sends requests to `/v1/chat/completions`, and syncs models from
 `/v1/models`.
 
-## Install
+## Quickstart
+
+```sh
+npx @deepseek-ai/dsh plugin --profile web add dsh-cpa
+```
+
+Headless profile:
+
+```sh
+npx @deepseek-ai/dsh plugin --profile headless add dsh-cpa
+```
+
+## Install From Source
+
+For development or local builds:
 
 ```sh
 npx @deepseek-ai/dsh plugin --profile web add .
