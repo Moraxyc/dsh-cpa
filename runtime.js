@@ -1,7 +1,13 @@
 import { CpaAdapter, resolveApiKey } from './adapter.js'
 import {
   assertCpaBinary,
+  DEFAULT_AUTH_FILES_TTL_MS,
+  DEFAULT_PORT,
+  DEFAULT_QUOTA_CONCURRENCY,
+  DEFAULT_QUOTA_TTL_MS,
+  DEFAULT_REFRESH_MS,
   fetchModels,
+  positiveNumber,
   randomKey,
   spawnCpa,
   stopChild,
@@ -10,27 +16,57 @@ import {
   writeManagedConfig,
 } from './config.js'
 import { installManagementPanelWhenReady } from './management.js'
+import { CpaQuotaService } from './quota.js'
+import {
+  aggregateCpaUsage,
+  CpaExecutionStore,
+  sanitizeExecutionRecord,
+  simpleProjectionSchema,
+} from './services.js'
 
-function internalBaseURL(options) {
-  return `http://${options.host}:${options.port}/v1`
+function internalBaseURL(options, port = options.port) {
+  return `http://${options.host}:${port}/v1`
+}
+
+function positiveInteger(value, fallback) {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
 }
 
 export function resolveInitialCpaSettings(options, persisted) {
-  const envSettings = {
+  const initial = {
     mode: options.url ? 'external' : 'internal',
     externalUrl: options.url || '',
-    externalApiKey: process.env[options.apiKeyEnv] || '',
+    externalApiKey: options.apiKey || '',
     externalManagementKey: options.managementKey,
     internalBin: options.bin || '',
+    usageStatisticsEnabled: true,
+    refreshIntervalMs: options.refreshIntervalMs ?? DEFAULT_REFRESH_MS,
+    port: options.port ?? DEFAULT_PORT,
+    configPath: options.configPath || '',
+    settingsPath: options.settingsPath || '',
+    executionsPath: options.executionsPath || '',
+    authFilesTtlMs: options.authFilesTtlMs ?? DEFAULT_AUTH_FILES_TTL_MS,
+    quotaTtlMs: options.quotaTtlMs ?? DEFAULT_QUOTA_TTL_MS,
+    quotaConcurrency: options.quotaConcurrency ?? DEFAULT_QUOTA_CONCURRENCY,
   }
-  if (persisted === undefined) return envSettings
+  if (persisted === undefined) return initial
 
   const settings = {
     mode: persisted.mode,
     externalUrl: persisted.externalUrl || options.url || '',
-    externalApiKey: persisted.externalApiKey || envSettings.externalApiKey || '',
-    externalManagementKey: persisted.externalManagementKey || envSettings.externalManagementKey || '',
-    internalBin: persisted.internalBin || envSettings.internalBin || '',
+    externalApiKey: persisted.externalApiKey || initial.externalApiKey || '',
+    externalManagementKey: persisted.externalManagementKey || initial.externalManagementKey || '',
+    internalBin: persisted.internalBin || initial.internalBin || '',
+    usageStatisticsEnabled: persisted.usageStatisticsEnabled !== false,
+    refreshIntervalMs: persisted.refreshIntervalMs || initial.refreshIntervalMs,
+    port: persisted.port || initial.port,
+    configPath: persisted.configPath || initial.configPath,
+    settingsPath: persisted.settingsPath || initial.settingsPath,
+    executionsPath: persisted.executionsPath || initial.executionsPath,
+    authFilesTtlMs: persisted.authFilesTtlMs || initial.authFilesTtlMs,
+    quotaTtlMs: persisted.quotaTtlMs || initial.quotaTtlMs,
+    quotaConcurrency: persisted.quotaConcurrency || initial.quotaConcurrency,
   }
   if (settings.mode === 'external' && !settings.externalUrl) {
     settings.mode = options.url ? 'external' : 'internal'
@@ -52,6 +88,15 @@ export function mergeCpaSettings(current, patch) {
   if (typeof source.externalApiKey === 'string') next.externalApiKey = source.externalApiKey
   if (typeof source.externalManagementKey === 'string') next.externalManagementKey = source.externalManagementKey
   if (typeof source.internalBin === 'string') next.internalBin = source.internalBin.trim()
+  if (typeof source.usageStatisticsEnabled === 'boolean') next.usageStatisticsEnabled = source.usageStatisticsEnabled
+  if (source.refreshIntervalMs !== undefined) next.refreshIntervalMs = positiveNumber(source.refreshIntervalMs, next.refreshIntervalMs)
+  if (source.port !== undefined) next.port = positiveInteger(source.port, next.port)
+  if (source.authFilesTtlMs !== undefined) next.authFilesTtlMs = positiveNumber(source.authFilesTtlMs, next.authFilesTtlMs)
+  if (source.quotaTtlMs !== undefined) next.quotaTtlMs = positiveNumber(source.quotaTtlMs, next.quotaTtlMs)
+  if (source.quotaConcurrency !== undefined) next.quotaConcurrency = positiveInteger(source.quotaConcurrency, next.quotaConcurrency)
+  for (const key of ['configPath', 'settingsPath', 'executionsPath']) {
+    if (typeof source[key] === 'string' && source[key].trim() !== '') next[key] = source[key].trim()
+  }
   return next
 }
 
@@ -61,6 +106,15 @@ export function cpaSettingsEqual(left, right) {
     && left.externalApiKey === right.externalApiKey
     && left.externalManagementKey === right.externalManagementKey
     && left.internalBin === right.internalBin
+    && left.usageStatisticsEnabled === right.usageStatisticsEnabled
+    && left.refreshIntervalMs === right.refreshIntervalMs
+    && left.port === right.port
+    && left.configPath === right.configPath
+    && left.settingsPath === right.settingsPath
+    && left.executionsPath === right.executionsPath
+    && left.authFilesTtlMs === right.authFilesTtlMs
+    && left.quotaTtlMs === right.quotaTtlMs
+    && left.quotaConcurrency === right.quotaConcurrency
 }
 
 function isConnectionError(error) {
@@ -73,7 +127,7 @@ export class CpaController {
     this.ctx = ctx
     this.options = options
     this.settings = settings
-    this.initialApiKey = process.env[options.apiKeyEnv]
+    this.apiKey = ''
     this.registration
     this.handle
     this.models = []
@@ -86,21 +140,32 @@ export class CpaController {
     this.queue = Promise.resolve()
     this.adapter = new CpaAdapter({
       baseURL: '',
+      provider: options.provider,
       defaultContextWindow: options.defaultContextWindow,
       defaultMaxTokens: options.defaultMaxTokens,
       getModels: () => this.models,
-      resolveApiKey: resolveApiKey(ctx, options.apiKeyEnv),
+      resolveApiKey: resolveApiKey(ctx, options.apiKeyRef, () => this.currentApiKey()),
+      onExecution: execution => this.recordExecution(execution),
     })
+    this.executionStore = new CpaExecutionStore(settings.executionsPath || options.executionsPath)
+    this.quotaService = new CpaQuotaService({
+      baseURL: () => this.currentBaseURL(),
+      managementKey: () => this.managementKey,
+      authFilesTtlMs: () => this.settings.authFilesTtlMs,
+      quotaTtlMs: () => this.settings.quotaTtlMs,
+      concurrency: () => this.settings.quotaConcurrency,
+    })
+    this.disposeProjection
   }
 
   currentBaseURL() {
     return this.activeMode === 'external'
       ? this.settings.externalUrl
-      : internalBaseURL(this.options)
+      : internalBaseURL(this.options, this.settings.port)
   }
 
   currentApiKey() {
-    return process.env[this.options.apiKeyEnv] || ''
+    return this.apiKey || ''
   }
 
   getState() {
@@ -117,6 +182,15 @@ export class CpaController {
         managementKeySet: Boolean(this.settings.externalManagementKey),
       },
       bin: this.settings.internalBin || this.options.bin,
+      usageStatisticsEnabled: this.settings.usageStatisticsEnabled,
+      refreshIntervalMs: this.settings.refreshIntervalMs,
+      port: this.settings.port,
+      configPath: this.settings.configPath,
+      settingsPath: this.settings.settingsPath,
+      executionsPath: this.settings.executionsPath,
+      authFilesTtlMs: this.settings.authFilesTtlMs,
+      quotaTtlMs: this.settings.quotaTtlMs,
+      quotaConcurrency: this.settings.quotaConcurrency,
       error: this.lastError || '',
     }
   }
@@ -132,15 +206,27 @@ export class CpaController {
       const next = mergeCpaSettings(this.settings, patch)
       if (cpaSettingsEqual(next, this.settings) && this.active) return this.getState()
       try {
+        if (this.active && next.mode === this.settings.mode) await this.stopRuntime()
         await this.applySettings(next)
         this.settings = next
         this.lastError = ''
         try {
-          await writeCpaSettings(this.options.settingsPath, next)
+          const settingsPath = next.settingsPath || this.options.settingsPath
+          await writeCpaSettings(settingsPath, next)
+          if (settingsPath !== this.options.settingsPath) {
+            await writeCpaSettings(this.options.settingsPath, next)
+          }
         } catch (error) {
           this.lastError = `save failed: ${error?.message || String(error)}`
           this.ctx.logger?.warn?.(`dsh-cpa: failed to save settings: ${this.lastError}`)
         }
+        const executionsPath = next.executionsPath || this.options.executionsPath
+        if (executionsPath !== this.executionStore.filePath) {
+          const nextStore = new CpaExecutionStore(executionsPath)
+          await nextStore.ensureLoaded()
+          this.executionStore = nextStore
+        }
+        this.startTimer()
       } catch (error) {
         this.lastError = error?.message || String(error)
         throw error
@@ -150,6 +236,7 @@ export class CpaController {
   }
 
   async install() {
+    await this.executionStore.ensureLoaded()
     try {
       await this.applySettings(this.settings)
     } catch (error) {
@@ -161,31 +248,70 @@ export class CpaController {
       managementKey: () => this.managementKey,
       getState: () => this.getState(),
       update: patch => this.update(patch),
+      executionStore: () => this.executionStore,
+      quotaService: this.quotaService,
     })
+    this.installProjection()
     this.startTimer()
   }
 
   async dispose() {
-    if (this.timer !== undefined) clearInterval(this.timer)
+    this.stopTimer()
     this.disposePanel?.()
+    const disposeProjection = this.disposeProjection
+    this.disposeProjection = undefined
+    await disposeProjection?.()
     await this.queue
     await this.stopRuntime()
-    if (this.initialApiKey === undefined) {
-      delete process.env[this.options.apiKeyEnv]
-    } else {
-      process.env[this.options.apiKeyEnv] = this.initialApiKey
+  }
+
+  async recordExecution(value) {
+    try {
+      const record = sanitizeExecutionRecord(value)
+      if (record === undefined) return
+      if (record.sessionId !== '') {
+        try {
+          this.ctx.sessions?.get(record.sessionId)?.append('cpa/execution', record)
+        } catch (error) {
+          this.ctx.logger?.warn?.(`dsh-cpa: session execution append failed: ${error?.message || String(error)}`)
+        }
+      }
+      await this.executionStore.append(record)
+    } catch (error) {
+      this.ctx.logger?.warn?.(`dsh-cpa: execution record failed: ${error?.message || String(error)}`)
+    }
+  }
+
+  installProjection() {
+    if (this.disposeProjection) return
+    try {
+      const fiber = this.ctx.inject?.(['sessionProjections'], projectionCtx => {
+        projectionCtx.sessionProjections.register({
+          key: 'cpaUsage',
+          schema: simpleProjectionSchema(),
+          init: () => null,
+          apply: (state, event) => event.type === 'cpa/execution'
+            ? aggregateCpaUsage(state, event.data)
+            : state,
+          view: state => state,
+          stateVersion: 1,
+        })
+      })
+      if (fiber !== undefined) {
+        this.disposeProjection = () => fiber.dispose()
+      }
+    } catch (error) {
+      this.ctx.logger?.warn?.(`dsh-cpa: projection registration failed: ${error?.message || String(error)}`)
+      this.disposeProjection = undefined
     }
   }
 
   setApiKey(value) {
-    if (value) {
-      process.env[this.options.apiKeyEnv] = value
-    } else {
-      delete process.env[this.options.apiKeyEnv]
-    }
+    this.apiKey = value || ''
   }
 
   async stopRuntime() {
+    this.stopTimer()
     if (this.registration) {
       this.registration()
       this.registration = undefined
@@ -214,12 +340,19 @@ export class CpaController {
   }
 
   startTimer() {
-    if (this.timer !== undefined || this.options.refreshIntervalMs <= 0) return
+    this.stopTimer()
+    if (!this.active || this.settings.refreshIntervalMs <= 0) return
     this.timer = setInterval(() => {
       if (!this.active) return
       void this.syncModels()
-    }, this.options.refreshIntervalMs)
+    }, this.settings.refreshIntervalMs)
     this.timer.unref?.()
+  }
+
+  stopTimer() {
+    if (this.timer === undefined) return
+    clearInterval(this.timer)
+    this.timer = undefined
   }
 
   async applySettings(next) {
@@ -239,7 +372,7 @@ export class CpaController {
 
     const apiKey = randomKey('sk-dsh')
     const managementKey = randomKey('mgmt-dsh')
-    const baseURL = internalBaseURL(this.options)
+    const baseURL = internalBaseURL(this.options, next.port)
     const bin = next.internalBin || this.options.bin
     let resolvedBin
     try {
@@ -247,13 +380,15 @@ export class CpaController {
     } catch (error) {
       throw new Error(`start failed: ${error.message}`)
     }
-    await writeManagedConfig(this.options.configPath, {
+    await writeManagedConfig(next.configPath || this.options.configPath, {
       host: this.options.host,
-      port: this.options.port,
+      port: next.port,
       apiKey,
       managementKey,
+      usageStatisticsEnabled: next.usageStatisticsEnabled,
     })
-    const handle = spawnCpa(resolvedBin, this.options.configPath, managementKey)
+    const configPath = next.configPath || this.options.configPath
+    const handle = spawnCpa(resolvedBin, configPath, managementKey)
     try {
       await waitForCpa(baseURL, apiKey, this.options.startTimeoutMs, handle)
     } catch (error) {
@@ -261,7 +396,6 @@ export class CpaController {
       throw new Error(`start failed: ${error.message}`)
     }
 
-    const previousApiKey = this.currentApiKey()
     const oldHandle = this.handle
     try {
       this.handle = handle
@@ -285,11 +419,7 @@ export class CpaController {
     } catch (error) {
       await stopChild(handle)
       if (this.handle === handle) this.handle = undefined
-      if (previousApiKey) {
-        process.env[this.options.apiKeyEnv] = previousApiKey
-      } else {
-        delete process.env[this.options.apiKeyEnv]
-      }
+      this.setApiKey('')
       throw error
     }
     await this.syncModels(baseURL, apiKey)

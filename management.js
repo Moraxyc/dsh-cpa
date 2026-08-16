@@ -4,6 +4,7 @@ import { Readable } from 'node:stream'
 export const STATUS_PATH = '/dsh-cpa/status'
 export const SETTINGS_PATH = '/dsh-cpa/settings'
 export const PANEL_PATH = '/dsh-cpa/management'
+export const EXECUTION_STATUS_PATH = '/dsh-cpa/execution-status'
 
 const COOKIE_NAME = 'dsh_cpa_mgmt'
 const PANEL_TIMEOUT_MS = 5_000
@@ -161,7 +162,12 @@ async function proxyManagement(options, url, req, res) {
     return
   }
 
-  const target = `${cpaRoot(baseURL)}${url.pathname.slice(PANEL_PATH.length)}${url.search}`
+  const targetPath = url.pathname.slice(PANEL_PATH.length)
+  if (targetPath === '/v0/management/api-call' || targetPath === '/v0/management/api-call/') {
+    sendJson(res, 403, { error: 'forbidden' })
+    return
+  }
+  const target = `${cpaRoot(baseURL)}${targetPath}${url.search}`
   const body = await readRequestBody(req)
   const headers = requestHeaders(req, managementKey)
   let response
@@ -193,6 +199,41 @@ function statusHandler(options) {
     sendJson(res, 200, {
       available: Boolean(managementKey),
       ...options.getState ? { state: options.getState() } : {},
+    })
+  }
+}
+
+function executionStatusHandler(options) {
+  return async (req, res) => {
+    const managementKey = optionValue(options, 'managementKey')
+    if (!managementKey) {
+      sendJson(res, 200, { available: false, accounts: [], quota: {}, execution: null })
+      return
+    }
+    const url = new URL(req.url ?? '/', 'http://localhost')
+    const sessionId = url.searchParams.get('sessionId') ?? undefined
+    let quota = { accounts: [], quota: {} }
+    try {
+      if (options.quotaService) {
+        quota = await options.quotaService.status()
+      }
+    } catch {
+      // Quota is best-effort; keep the execution readout available.
+    }
+    let execution
+    try {
+      const executionStore = typeof options.executionStore === 'function'
+        ? options.executionStore()
+        : options.executionStore
+      execution = executionStore?.latest(sessionId) ?? null
+    } catch {
+      execution = null
+    }
+    sendJson(res, 200, {
+      available: true,
+      accounts: quota.accounts,
+      quota: quota.quota,
+      execution: execution ?? null,
     })
   }
 }
@@ -267,6 +308,11 @@ export function installManagementPanelWhenReady(ctx, options) {
       kind: 'exact',
       path: STATUS_PATH,
       handler: statusHandler(options),
+    }))
+    disposers.push(server.register({
+      kind: 'exact',
+      path: EXECUTION_STATUS_PATH,
+      handler: executionStatusHandler(options),
     }))
     disposers.push(server.register({
       kind: 'exact',

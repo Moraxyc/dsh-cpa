@@ -12,6 +12,9 @@ export const DEFAULT_REFRESH_MS = 300_000
 export const DEFAULT_START_TIMEOUT_MS = 30_000
 export const DEFAULT_CONTEXT_WINDOW = 262_144
 export const DEFAULT_MAX_TOKENS = 32_768
+export const DEFAULT_AUTH_FILES_TTL_MS = 30_000
+export const DEFAULT_QUOTA_TTL_MS = 60_000
+export const DEFAULT_QUOTA_CONCURRENCY = 4
 
 const REASONING_LEVEL_NAMES = {
   none: 'None',
@@ -45,6 +48,19 @@ export function sanitizeCpaSettings(value) {
     externalApiKey: typeof source.externalApiKey === 'string' ? source.externalApiKey : '',
     externalManagementKey: typeof source.externalManagementKey === 'string' ? source.externalManagementKey : '',
     internalBin: typeof source.internalBin === 'string' ? source.internalBin.trim() : '',
+    usageStatisticsEnabled: source.usageStatisticsEnabled !== false,
+    refreshIntervalMs: positiveNumber(source.refreshIntervalMs, DEFAULT_REFRESH_MS),
+    port: Number.isInteger(Number(source.port)) && Number(source.port) > 0
+      ? Number(source.port)
+      : DEFAULT_PORT,
+    configPath: typeof source.configPath === 'string' ? source.configPath.trim() : '',
+    settingsPath: typeof source.settingsPath === 'string' ? source.settingsPath.trim() : '',
+    executionsPath: typeof source.executionsPath === 'string' ? source.executionsPath.trim() : '',
+    authFilesTtlMs: positiveNumber(source.authFilesTtlMs, DEFAULT_AUTH_FILES_TTL_MS),
+    quotaTtlMs: positiveNumber(source.quotaTtlMs, DEFAULT_QUOTA_TTL_MS),
+    quotaConcurrency: Number.isInteger(Number(source.quotaConcurrency)) && Number(source.quotaConcurrency) > 0
+      ? Number(source.quotaConcurrency)
+      : DEFAULT_QUOTA_CONCURRENCY,
   }
 }
 
@@ -197,7 +213,7 @@ export async function fetchModels(baseURL, apiKey, timeoutMs = 10_000) {
   }
 }
 
-export function buildManagedConfig({ host, port, apiKey, managementKey }) {
+export function buildManagedConfig({ host, port, apiKey, managementKey, usageStatisticsEnabled = true }) {
   return [
     '# Managed by dsh-cpa. Overwritten on managed start.',
     `host: ${yamlString(host)}`,
@@ -209,7 +225,7 @@ export function buildManagedConfig({ host, port, apiKey, managementKey }) {
     'api-keys:',
     `  - ${yamlString(apiKey)}`,
     'debug: false',
-    'usage-statistics-enabled: false',
+    `usage-statistics-enabled: ${usageStatisticsEnabled ? 'true' : 'false'}`,
     '',
   ].join('\n')
 }
@@ -324,21 +340,22 @@ export async function stopChild(handle) {
 }
 
 export function resolveOptions(config = {}) {
-  const env = process.env
   return {
     provider: config.provider || 'cpa',
-    url: config.url || env.CPA_URL || '',
-    apiKeyEnv: config.apiKeyEnv || 'CPA_API_KEY',
-    managementKey: config.managementKey || env.CPA_MANAGEMENT_KEY || '',
-    bin: config.bin || env.CPA_BIN || DEFAULT_BIN,
-    configPath: config.configPath || env.CPA_CONFIG || join(dshHome(), 'cpa', 'config.yaml'),
-    settingsPath: config.settingsPath || env.CPA_SETTINGS || join(dshHome(), 'cpa', 'settings.json'),
+    apiKey: config.apiKey || '',
+    apiKeyRef: config.apiKeyRef || 'CPA_API_KEY',
+    url: config.url || '',
+    managementKey: config.managementKey || '',
+    bin: config.bin || DEFAULT_BIN,
+    configPath: config.configPath || join(dshHome(), 'cpa', 'config.yaml'),
+    settingsPath: config.settingsPath || join(dshHome(), 'cpa', 'settings.json'),
+    executionsPath: config.executionsPath || join(dshHome(), 'cpa', 'executions.json'),
+    authFilesTtlMs: positiveNumber(config.authFilesTtlMs, DEFAULT_AUTH_FILES_TTL_MS),
+    quotaTtlMs: positiveNumber(config.quotaTtlMs, DEFAULT_QUOTA_TTL_MS),
+    quotaConcurrency: positiveNumber(config.quotaConcurrency, DEFAULT_QUOTA_CONCURRENCY),
     host: config.host || DEFAULT_HOST,
     port: Number(config.port ?? DEFAULT_PORT),
-    refreshIntervalMs: positiveNumber(
-      config.refreshIntervalMs ?? env.CPA_REFRESH_INTERVAL_MS,
-      DEFAULT_REFRESH_MS,
-    ),
+    refreshIntervalMs: positiveNumber(config.refreshIntervalMs, DEFAULT_REFRESH_MS),
     startTimeoutMs: positiveNumber(config.startTimeoutMs, DEFAULT_START_TIMEOUT_MS),
     defaultContextWindow: positiveNumber(
       config.defaultContextWindow,

@@ -34,6 +34,33 @@ function requestId(headers) {
   return value === null || value.length === 0 ? undefined : ProviderRequestId(value)
 }
 
+export function parseCpaTraceId(value) {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  if (trimmed.length <= 15) return undefined
+  const separator = trimmed.indexOf('-', 14)
+  if (separator !== 14 || !/^\d{14}$/.test(trimmed.slice(0, 14))) return undefined
+  const tail = trimmed.slice(15)
+  const requestSeparator = tail.lastIndexOf('-')
+  if (requestSeparator <= 0 || requestSeparator === tail.length - 1) return undefined
+  const authIndex = tail.slice(0, requestSeparator)
+  const requestIdValue = tail.slice(requestSeparator + 1)
+  if (authIndex.length === 0 || !/^[0-9a-f]{8}$/i.test(requestIdValue)) return undefined
+  return {
+    traceId: trimmed,
+    authIndex,
+    requestId: ProviderRequestId(requestIdValue),
+  }
+}
+
+function cpaTrace(headers) {
+  return parseCpaTraceId(headers.get('x-cpa-trace-id'))
+}
+
+function responseRequestId(headers) {
+  return requestId(headers) ?? cpaTrace(headers)?.requestId
+}
+
 function httpErrorCode(status, detail) {
   if (status === 401 || status === 403) return 'AUTH'
   if (isQuotaExceededError(detail)) return 'QUOTA'
@@ -359,11 +386,13 @@ async function readError(response) {
     // Keep HTTP status for malformed error bodies.
   }
   const delay = providerRetryAfterMs(response.headers.get('retry-after'))
-  const id = requestId(response.headers)
+  const trace = cpaTrace(response.headers)
+  const id = responseRequestId(response.headers)
   throw new LlmError(message, httpErrorCode(response.status, detail), {
     status: response.status,
     ...delay === undefined ? {} : { providerRetryAfterMs: delay },
     ...id === undefined ? {} : { requestId: id },
+    ...trace === undefined ? {} : { authIndex: trace.authIndex },
   })
 }
 
@@ -424,6 +453,19 @@ export class CpaAdapter extends LlmAdapter {
     }
 
     if (!response.ok) {
+      const trace = cpaTrace(response.headers)
+      if (trace !== undefined && typeof this.options.onExecution === 'function') {
+        await this.options.onExecution({
+          authIndex: trace.authIndex,
+          traceId: trace.traceId,
+          requestId: trace.requestId,
+          sessionId: options.sessionId,
+          provider: this.options.provider,
+          model: options.model,
+          purpose: options.purpose,
+          outcome: 'failure',
+        })
+      }
       await readError(response)
       return
     }
@@ -431,22 +473,50 @@ export class CpaAdapter extends LlmAdapter {
       throw new LlmError('empty response', 'EMPTY_RESPONSE')
     }
 
-    yield* translate(parseSse(response.body))
+    const trace = cpaTrace(response.headers)
+    let executionUsage
+    let completed = false
+    try {
+      for await (const event of translate(parseSse(response.body))) {
+        if (event.type === 'usage' && event.usage !== undefined) executionUsage = event.usage
+        yield event
+      }
+      completed = true
+    } finally {
+      if (trace !== undefined && typeof this.options.onExecution === 'function') {
+        await this.options.onExecution({
+          authIndex: trace.authIndex,
+          traceId: trace.traceId,
+          requestId: trace.requestId,
+          sessionId: options.sessionId,
+          provider: this.options.provider,
+          model: options.model,
+          purpose: options.purpose,
+          outcome: completed ? 'success' : 'failure',
+          ...executionUsage === undefined
+            ? {}
+            : {
+                inputTokens: executionUsage.inputTokens,
+                outputTokens: executionUsage.outputTokens,
+              },
+        })
+      }
+    }
   }
 }
 
-export function resolveApiKey(ctx, ref) {
+export function resolveApiKey(ctx, ref, provided) {
   return async () => {
+    const configured = typeof provided === 'function' ? await provided() : provided
+    if (configured !== undefined && configured !== null && configured !== '') {
+      return assertUsableApiKey(configured, 'dsh-cpa', ref)
+    }
     const credentials = ctx.get('credentials')
     if (credentials !== undefined) {
       const hit = await credentials.resolve(ref)
       if (hit !== undefined) {
         return assertUsableApiKey(hit.value, 'dsh-cpa', ref)
       }
-    }
-    const ambient = process.env[ref]
-    if (ambient !== undefined && ambient.length > 0) {
-      return assertUsableApiKey(ambient, 'dsh-cpa', ref)
     }
     throw new LlmError(`no API key for ${ref}`, 'MISSING_CREDENTIAL')
   }

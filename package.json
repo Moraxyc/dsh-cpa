@@ -15,6 +15,8 @@
     "client.js",
     "adapter.js",
     "config.js",
+    "quota.js",
+    "services.js",
     "cordis.patch.yml",
     "README.md",
     "README.en.md"
@@ -31,7 +33,7 @@
     }
   },
   "scripts": {
-    "check": "node --check index.js && node --check management.js && node --check runtime.js && node --check client.js",
+    "check": "node --check index.js && node --check management.js && node --check runtime.js && node --check client.js && node --check adapter.js && node --check quota.js && node --check services.js && node --check config.js",
     "test": "node --test test.js"
   },
   "peerDependencies": {
