@@ -16,6 +16,7 @@ import {
   writeManagedConfig,
 } from '../core/config.js'
 import { installManagementPanelWhenReady } from './management.js'
+import { CpaDataService } from './data.js'
 import { CpaQuotaService } from './quota.js'
 import {
   aggregateCpaUsage,
@@ -155,6 +156,13 @@ export class CpaController {
       quotaTtlMs: () => this.settings.quotaTtlMs,
       concurrency: () => this.settings.quotaConcurrency,
     })
+    this.dataService = new CpaDataService({
+      baseURL: () => this.currentBaseURL(),
+      managementKey: () => this.managementKey,
+      dataTtlMs: () => 30_000,
+      modelTtlMs: () => 60_000,
+      concurrency: () => 4,
+    })
     this.disposeProjection
   }
 
@@ -250,6 +258,7 @@ export class CpaController {
       update: patch => this.update(patch),
       executionStore: () => this.executionStore,
       quotaService: this.quotaService,
+      dataService: this.dataService,
     })
     this.installProjection()
     this.startTimer()

@@ -79,3 +79,21 @@ management API is available.
 
 The internal CPA `usage-statistics-enabled` setting is on by default and can be
 disabled in the CPA settings panel.
+
+## CPA Summary
+
+A read-only `/dsh-cpa/summary` endpoint is served by the plugin. The server
+uses the management key to call CPA's management API, and the browser only
+receives sanitized summary data, never the management key or credential fields.
+It includes version/update state, a whitelisted runtime config snapshot, usage
+request totals aggregated from `/v0/management/api-key-usage` and auth-file
+counters, sanitized accounts, and model-to-account availability from auth
+files. The CPA management API does not expose aggregate token totals, so those
+values stay at zero. Data is cached briefly; a failed source is recorded as an
+error without hiding other data.
+
+The settings page includes a compact "CPA Summary" section for version/update
+state, runtime config, usage totals, usage details, and accounts. Composer status
+details include a "日志" deep link when a recorded `requestId` exists, opening
+CPA's original management log surface. The management panel remains the complete
+management entry point.

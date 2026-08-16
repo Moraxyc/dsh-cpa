@@ -16,10 +16,13 @@ window.__ModuleLoader__.load({
     } = require('@deepseek-ai/dsh-client-ui-primitives')
 
     const SETTINGS_URL = '/dsh-cpa/settings'
+    const SUMMARY_URL = '/dsh-cpa/summary'
     const PANEL_URL = '/dsh-cpa/management'
     const EXECUTION_STATUS_URL = '/dsh-cpa/execution-status'
     const STYLE_ID = 'dsh-cpa-client'
     const READOUT_REFRESH_MS = 60_000
+    const SUMMARY_REFRESH_MS = 60_000
+    const MAX_SUMMARY_MODELS = 8
 
     if (typeof document !== 'undefined' && !document.querySelector(`style[data-plugin-css="${STYLE_ID}"]`)) {
       const style = document.createElement('style')
@@ -121,6 +124,94 @@ window.__ModuleLoader__.load({
         .dsh-cpa-details-value {
           min-width: 0;
           overflow-wrap: anywhere;
+        }
+        .dsh-cpa-details-value a {
+          color: var(--dsw-alias-brand-primary);
+          text-decoration: none;
+        }
+        .dsh-cpa-details-value a:hover {
+          text-decoration: underline;
+        }
+        .dsh-cpa-summary {
+          box-sizing: border-box;
+          margin: 0 0 16px;
+          padding-top: 12px;
+          border-top: 1px solid var(--dsw-alias-border-l2);
+        }
+        .dsh-cpa-summary-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          margin-bottom: 8px;
+        }
+        .dsh-cpa-summary-title {
+          font-size: 13px;
+          font-weight: 600;
+          line-height: 20px;
+          color: var(--dsw-alias-label-primary);
+        }
+        .dsh-cpa-summary-status {
+          margin-top: 4px;
+          font-size: 12px;
+          line-height: 20px;
+          color: var(--dsw-alias-label-tertiary);
+        }
+        .dsh-cpa-summary-status-warning {
+          color: var(--dsw-alias-state-error-primary);
+        }
+        .dsh-cpa-summary-block {
+          margin-top: 10px;
+        }
+        .dsh-cpa-summary-block-title {
+          margin-bottom: 4px;
+          font-size: 12px;
+          line-height: 18px;
+          color: var(--dsw-alias-label-tertiary);
+        }
+        .dsh-cpa-summary-grid {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 4px 14px;
+        }
+        .dsh-cpa-summary-item {
+          display: inline-flex;
+          gap: 4px;
+          min-width: 0;
+          font-size: 12px;
+          line-height: 20px;
+          color: var(--dsw-alias-label-secondary);
+        }
+        .dsh-cpa-summary-key {
+          flex: 0 0 auto;
+          color: var(--dsw-alias-label-tertiary);
+        }
+        .dsh-cpa-summary-value {
+          min-width: 0;
+          overflow-wrap: anywhere;
+        }
+        .dsh-cpa-summary-list {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+        .dsh-cpa-summary-list-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 2px 12px;
+          min-width: 0;
+          font-size: 12px;
+          line-height: 20px;
+          color: var(--dsw-alias-label-secondary);
+        }
+        .dsh-cpa-summary-list-main {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .dsh-cpa-summary-list-warning {
+          color: var(--dsw-alias-state-error-primary);
         }
       `
       document.head.appendChild(style)
@@ -405,8 +496,114 @@ window.__ModuleLoader__.load({
       }
       if (execution && typeof execution.requestId === 'string' && execution.requestId !== '') {
         rows.push({ label: 'Request', value: execution.requestId })
+        rows.push({
+          label: '日志',
+          value: React.createElement('a', {
+            href: `${PANEL_URL}/request-log-by-id/${encodeURIComponent(execution.requestId)}`,
+            target: '_blank',
+            rel: 'noreferrer',
+      }, '查看'),
+        })
       }
       return rows
+    }
+
+    async function fetchCpaSummary() {
+      const response = await fetch(SUMMARY_URL, {
+        headers: { accept: 'application/json' },
+        cache: 'no-store',
+      })
+      if (!response.ok) throw new Error('CPA 摘要不可用')
+      return response.json().catch(() => { throw new Error('CPA 摘要不可用') })
+    }
+
+    function summaryNumber(value) {
+      const number = Number(value)
+      return Number.isFinite(number) ? number : 0
+    }
+
+    function formatSummaryNumber(value) {
+      return Math.round(summaryNumber(value)).toLocaleString()
+    }
+
+    function formatSuccessRate(value) {
+      const ratio = summaryNumber(value)
+      return `${Math.round(Math.min(1, Math.max(0, ratio)) * 100)}%`
+    }
+
+    function configSummaryItems(config) {
+      const source = config && typeof config === 'object' ? config : {}
+      const items = []
+      if (source.routingStrategy !== undefined && source.routingStrategy !== null && source.routingStrategy !== '') {
+        items.push({ label: '路由策略', value: String(source.routingStrategy) })
+      }
+      if (typeof source.proxyUrl === 'string' && source.proxyUrl !== '') {
+        items.push({ label: '代理', value: source.proxyUrl })
+      }
+      if (summaryNumber(source.requestRetry) > 0) {
+        items.push({ label: '请求重试', value: formatSummaryNumber(source.requestRetry) })
+      }
+      if (typeof source.requestLog === 'boolean') {
+        items.push({ label: '请求日志', value: source.requestLog ? '开启' : '关闭' })
+      }
+      if (typeof source.forceModelPrefix === 'boolean') {
+        items.push({ label: '强制模型前缀', value: source.forceModelPrefix ? '开启' : '关闭' })
+      }
+      if (typeof source.usageStatisticsEnabled === 'boolean') {
+        items.push({ label: '使用统计', value: source.usageStatisticsEnabled ? '开启' : '关闭' })
+      }
+      return items
+    }
+
+    function sortSummaryModels(models) {
+      if (!Array.isArray(models)) return []
+      return models
+        .filter(model => model !== null && typeof model === 'object')
+        .sort((left, right) => {
+          const leftTokens = summaryNumber(left.totalTokens)
+          const rightTokens = summaryNumber(right.totalTokens)
+          if (leftTokens !== rightTokens) return rightTokens - leftTokens
+          const leftRequests = summaryNumber(left.totalRequests)
+          const rightRequests = summaryNumber(right.totalRequests)
+          if (leftRequests !== rightRequests) return rightRequests - leftRequests
+          return String(left.modelId || '').localeCompare(String(right.modelId || ''), undefined, {
+            numeric: true,
+            sensitivity: 'base',
+          })
+        })
+        .slice(0, MAX_SUMMARY_MODELS)
+    }
+
+    function accountSummaryText(account) {
+      if (!account || typeof account !== 'object') return ''
+      const parts = []
+      const provider = providerLabel(account.provider)
+      const label = accountLabel(account)
+      const status = accountStatus(account) || '正常'
+      const source = sourceLabel(account)
+      const modelCount = Array.isArray(account.models) ? account.models.length : 0
+      if (provider !== '') parts.push(provider)
+      if (label !== '' && !labelMentionsProvider(label, provider)) parts.push(label)
+      if (source !== '') parts.push(source)
+      parts.push(`${modelCount} 模型`)
+      if (status !== '') parts.push(status)
+      return parts.join(' · ')
+    }
+
+    function summaryAccountWarning(account) {
+      return Boolean(account && typeof account === 'object'
+        && (account.disabled === true || account.unavailable === true || accountStatus(account) !== ''))
+    }
+
+    function summaryErrorSources(errors) {
+      const sources = []
+      if (!Array.isArray(errors)) return sources
+      for (const error of errors) {
+        if (!error || typeof error !== 'object') continue
+        const source = typeof error.source === 'string' && error.source !== '' ? error.source : 'summary'
+        if (!sources.includes(source)) sources.push(source)
+      }
+      return sources
     }
 
     function accountNeedsWarning(account, quota, execution) {
@@ -490,6 +687,157 @@ window.__ModuleLoader__.load({
             React.createElement('span', { className: 'dsh-cpa-details-value' }, row.value),
           )),
         ) : null,
+      )
+    }
+
+    function CpaDataSummary({ active, managementAvailable }) {
+      const [summary, setSummary] = useState(null)
+      const [summaryError, setSummaryError] = useState('')
+      const [refreshing, setRefreshing] = useState(false)
+
+      useEffect(() => {
+        let cancelled = false
+        async function load() {
+          try {
+            const body = await fetchCpaSummary()
+            if (!cancelled) {
+              setSummary(body)
+              setSummaryError('')
+            }
+          } catch {
+            if (!cancelled) setSummaryError('CPA 摘要不可用')
+          }
+        }
+        void load()
+        const timer = setInterval(() => { void load() }, SUMMARY_REFRESH_MS)
+        return () => {
+          cancelled = true
+          clearInterval(timer)
+        }
+      }, [active, managementAvailable])
+
+      async function refresh() {
+        setRefreshing(true)
+        setSummaryError('')
+        try {
+          setSummary(await fetchCpaSummary())
+        } catch {
+          setSummaryError('CPA 摘要不可用')
+        } finally {
+          setRefreshing(false)
+        }
+      }
+
+      const header = React.createElement('div', { className: 'dsh-cpa-summary-header' },
+        React.createElement('span', { className: 'dsh-cpa-summary-title' }, 'CPA 摘要'),
+        React.createElement(Button, {
+          variant: 'outline',
+          size: 'sm',
+          onClick: () => { void refresh() },
+          disabled: refreshing,
+        }, refreshing ? '刷新中' : '刷新'),
+      )
+
+      if (!summary || summary.available !== true) {
+        return React.createElement('div', { className: 'dsh-cpa-summary' },
+          header,
+          React.createElement('div', {
+            className: 'dsh-cpa-summary-status dsh-cpa-summary-status-warning',
+          }, summaryError || (summary ? 'CPA 摘要不可用' : 'CPA 摘要加载中')),
+        )
+      }
+
+      const instance = summary.instance && typeof summary.instance === 'object' ? summary.instance : {}
+      const config = instance.config && typeof instance.config === 'object' ? instance.config : {}
+      const usage = summary.usage && typeof summary.usage === 'object' ? summary.usage : {}
+      const totals = usage.totals && typeof usage.totals === 'object' ? usage.totals : {}
+      const models = sortSummaryModels(usage.models)
+      const accounts = Array.isArray(summary.accounts) ? summary.accounts : []
+      const errorSources = summaryErrorSources(summary.errors)
+
+      const instanceItems = [
+        { label: '当前版本', value: instance.version || '未获取' },
+        { label: '最新版本', value: instance.latestVersion || '未获取' },
+        { label: '更新', value: instance.updateAvailable === true
+          ? '可更新'
+          : instance.version && instance.latestVersion
+            ? '已是最新'
+            : '未知' },
+      ]
+      const configItems = configSummaryItems(config)
+      const usageItems = [
+        { label: '总请求', value: formatSummaryNumber(totals.totalRequests) },
+        { label: '成功', value: formatSummaryNumber(totals.successRequests) },
+        { label: '失败', value: formatSummaryNumber(totals.failedRequests) },
+        { label: '成功率', value: formatSuccessRate(totals.successRate) },
+        { label: '输入 tokens', value: formatSummaryNumber(totals.totalPromptTokens) },
+        { label: '输出 tokens', value: formatSummaryNumber(totals.totalCompletionTokens) },
+        { label: '总 tokens', value: formatSummaryNumber(totals.totalTokens) },
+      ]
+
+      function summaryBlock(title, children) {
+        return React.createElement('div', { className: 'dsh-cpa-summary-block' },
+          React.createElement('div', { className: 'dsh-cpa-summary-block-title' }, title),
+          children,
+        )
+      }
+
+      function summaryItems(items) {
+        return React.createElement('div', { className: 'dsh-cpa-summary-grid' },
+          items.map(item => React.createElement('span', {
+            className: 'dsh-cpa-summary-item',
+            key: item.label,
+          },
+            React.createElement('span', { className: 'dsh-cpa-summary-key' }, item.label),
+            React.createElement('span', { className: 'dsh-cpa-summary-value' }, item.value),
+          )),
+        )
+      }
+
+      const modelList = models.length > 0 ? summaryBlock('用量明细',
+        React.createElement('div', { className: 'dsh-cpa-summary-list' },
+          models.map((model, index) => React.createElement('div', {
+            className: `dsh-cpa-summary-list-row${summaryNumber(model.failedRequests) > 0 ? ' dsh-cpa-summary-list-warning' : ''}`,
+            key: String(model.modelId || index),
+          },
+            React.createElement('span', { className: 'dsh-cpa-summary-list-main' }, model.modelId || '未知'),
+            React.createElement('span', null, `请求 ${formatSummaryNumber(model.totalRequests)}`),
+            summaryNumber(model.totalTokens) > 0 ? React.createElement('span', null, `tokens ${formatSummaryNumber(model.totalTokens)}`) : null,
+            React.createElement('span', null, `失败 ${formatSummaryNumber(model.failedRequests)}`),
+          )),
+        ),
+      ) : null
+
+      const accountList = summaryBlock('账号',
+        accounts.length > 0 ? React.createElement('div', { className: 'dsh-cpa-summary-list' },
+          accounts.map((account, index) => React.createElement('div', {
+            className: `dsh-cpa-summary-list-row${summaryAccountWarning(account) ? ' dsh-cpa-summary-list-warning' : ''}`,
+            key: account?.authIndex || index,
+          },
+            React.createElement('span', { className: 'dsh-cpa-summary-list-main' }, accountSummaryText(account) || '未知账号'),
+          )),
+        ) : React.createElement('div', { className: 'dsh-cpa-summary-list-row' },
+          React.createElement('span', null, '无账号'),
+        ),
+      )
+
+      const errorBlock = errorSources.length > 0 ? summaryBlock('错误',
+        React.createElement('div', { className: 'dsh-cpa-summary-list-row dsh-cpa-summary-list-warning' },
+          React.createElement('span', null, `部分数据不可用: ${errorSources.join('、')}`),
+        ),
+      ) : null
+
+      return React.createElement('div', { className: 'dsh-cpa-summary' },
+        header,
+        summaryError ? React.createElement('div', {
+          className: 'dsh-cpa-summary-status dsh-cpa-summary-status-warning',
+        }, '刷新失败') : null,
+        summaryBlock('实例', summaryItems(instanceItems)),
+        configItems.length > 0 ? summaryBlock('运行配置', summaryItems(configItems)) : null,
+        summaryBlock('用量', summaryItems(usageItems)),
+        modelList,
+        accountList,
+        errorBlock,
       )
     }
 
@@ -632,6 +980,10 @@ window.__ModuleLoader__.load({
             onClick: () => setPanelOpen(true),
           }, '管理面板') : null,
         ),
+        React.createElement(CpaDataSummary, {
+          active: state.active,
+          managementAvailable: state.managementAvailable,
+        }),
         React.createElement('div', { style: rowStyle },
           React.createElement(Pill, {
             active: mode === 'internal',

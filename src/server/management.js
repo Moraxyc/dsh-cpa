@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto'
 import { Readable } from 'node:stream'
+import { emptyCpaSummary } from './data.js'
 
 export const STATUS_PATH = '/dsh-cpa/status'
+export const SUMMARY_PATH = '/dsh-cpa/summary'
 export const SETTINGS_PATH = '/dsh-cpa/settings'
 export const PANEL_PATH = '/dsh-cpa/management'
 export const EXECUTION_STATUS_PATH = '/dsh-cpa/execution-status'
@@ -238,6 +240,23 @@ function executionStatusHandler(options) {
   }
 }
 
+function summaryHandler(options) {
+  return async (_req, res) => {
+    if (!optionValue(options, 'managementKey')) {
+      sendJson(res, 200, emptyCpaSummary({ available: false }))
+      return
+    }
+    try {
+      sendJson(res, 200, await options.dataService?.summary() ?? emptyCpaSummary({ available: true }))
+    } catch (error) {
+      sendJson(res, 200, emptyCpaSummary({
+        available: true,
+        errors: [{ source: 'summary', message: error?.message || String(error) }],
+      }))
+    }
+  }
+}
+
 function settingsHandler(options) {
   return async (req, res) => {
     if (req.method === 'GET') {
@@ -313,6 +332,11 @@ export function installManagementPanelWhenReady(ctx, options) {
       kind: 'exact',
       path: EXECUTION_STATUS_PATH,
       handler: executionStatusHandler(options),
+    }))
+    disposers.push(server.register({
+      kind: 'exact',
+      path: SUMMARY_PATH,
+      handler: summaryHandler(options),
     }))
     disposers.push(server.register({
       kind: 'exact',

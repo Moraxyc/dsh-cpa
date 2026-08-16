@@ -292,6 +292,7 @@ export function sanitizeAuthFile(entry) {
   const authIndex = stringOrEmpty(firstValue(entry, ['auth_index', 'authIndex']))
   if (authIndex === '') return undefined
   const label = stringOrEmpty(firstValue(entry, ['label', 'name', 'id'])) || authIndex
+  const name = stringOrEmpty(firstValue(entry, ['name', 'id']))
   const provider = (stringOrEmpty(firstValue(entry, ['provider', 'type'])) || 'unknown').toLowerCase()
   const priority = firstNumber(entry, ['priority'])
   const lastRefresh = stringOrEmpty(firstValue(entry, ['last_refresh', 'lastRefresh']))
@@ -311,6 +312,7 @@ export function sanitizeAuthFile(entry) {
   return {
     authIndex,
     label: label.slice(0, 120),
+    ...name === '' ? {} : { name: name.slice(0, 240) },
     provider,
     status: stringOrEmpty(firstValue(entry, ['status'])),
     source,
@@ -466,7 +468,7 @@ function sanitizeProviderAccounts(body, spec) {
   return accounts
 }
 
-async function fetchApiProviders(baseURL, managementKey) {
+export async function fetchApiProviders(baseURL, managementKey) {
   const settled = await Promise.allSettled(PROVIDER_KEY_ENDPOINTS.map(async spec => {
     const body = await managementApi(baseURL, managementKey, spec.path)
     return sanitizeProviderAccounts(body, spec)
@@ -474,13 +476,13 @@ async function fetchApiProviders(baseURL, managementKey) {
   return settled.flatMap(result => result.status === 'fulfilled' ? result.value : [])
 }
 
-function publicAccount(account) {
+export function publicAccount(account) {
   if (account === null || typeof account !== 'object') return account
   const { accountId, projectId, ...rest } = account
   return rest
 }
 
-async function managementApi(baseURL, managementKey, path) {
+export async function managementApiWithHeaders(baseURL, managementKey, path) {
   const url = `${cpaManagementRoot(baseURL)}${path}`
   const response = await fetch(url, {
     method: 'GET',
@@ -492,7 +494,12 @@ async function managementApi(baseURL, managementKey, path) {
   })
   if (!response.ok) throw new Error(`management API ${response.status}`)
   const body = await response.json().catch(() => null)
-  return body ?? {}
+  return { body: body ?? {}, headers: response.headers }
+}
+
+export async function managementApi(baseURL, managementKey, path) {
+  const { body } = await managementApiWithHeaders(baseURL, managementKey, path)
+  return body
 }
 
 export async function fetchAuthFiles(baseURL, managementKey) {

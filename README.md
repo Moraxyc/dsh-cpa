@@ -69,3 +69,16 @@ dsh 已展示的 token、耗时和性能统计。服务商同时从认证文件�
 token，作为 `cpaUsage` 投影保留；无管理 API 时状态行自动隐藏。
 
 内部 CPA 的 `usage-statistics-enabled` 默认开启，可在 CPA 设置面板中关闭。
+
+## CPA 摘要
+
+只读 `/dsh-cpa/summary` 接口由服务端使用 management key 调用 CPA 管理 API，
+浏览器只收到脱敏汇总数据，不包含 management key 或账号凭据。摘要包含版本/更新
+状态、白名单过滤的运行时配置、`/v0/management/api-key-usage` 与认证文件计数聚合
+的请求统计、脱敏账号，以及认证文件提供的模型到账号可用性。CPA 管理 API 不暴露
+token 汇总，因此 token 项保持为 0。服务端做短时缓存；单个来源失败只记录错误，
+不影响其他数据。
+
+设置页提供紧凑的“CPA 摘要”区域：版本/更新、运行配置、用量总计、用量明细、账号。
+composer 状态详情在有 `requestId` 时提供“日志”链接，打开 CPA 原始 management
+日志界面。管理面板仍是完整管理入口。
