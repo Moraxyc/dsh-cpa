@@ -19,7 +19,11 @@ jobs:
 
             - uses: actions/setup-node@v7
               with:
+                  node-version: 24
                   registry-url: https://registry.npmjs.org
+
+            - name: Upgrade npm for OIDC trusted publishing
+              run: npm install -g npm@11
 
             - run: npm install --no-audit --no-fund
             - run: npm run check
