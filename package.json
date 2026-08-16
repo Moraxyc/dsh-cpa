@@ -1,31 +1,34 @@
 {
   "name": "dsh-cpa",
   "version": "0.1.0",
+  "description": "DSH CPA provider and runtime plugin",
+  "keywords": [
+    "dsh-plugin",
+    "cpa"
+  ],
+  "homepage": "https://github.com/Moraxyc/dsh-cpa",
+  "bugs": {
+    "url": "https://github.com/Moraxyc/dsh-cpa/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Moraxyc/dsh-cpa.git"
+  },
+  "license": "MIT",
   "type": "module",
-  "main": "./src/index.js",
   "exports": {
     ".": "./src/index.js",
     "./client": "./src/client.js",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
+  "main": "./src/index.js",
   "files": [
     "src/**/*.js",
     "cordis.patch.yml",
     "README.md",
     "README.en.md"
   ],
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "inject": [
-        "@deepseek-ai/dsh-client-ui-primitives"
-      ],
-      "platform": "web"
-    }
-  },
   "scripts": {
     "check": "node --check src/index.js && node --check src/core/config.js && node --check src/core/adapter.js && node --check src/core/services.js && node --check src/server/management.js && node --check src/server/quota.js && node --check src/server/runtime.js && node --check src/client.js",
     "test": "node --test test.js"
@@ -37,5 +40,15 @@
   "engines": {
     "node": ">=22"
   },
-  "license": "MIT"
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-primitives"
+      ],
+      "platform": "web"
+    }
+  }
 }
