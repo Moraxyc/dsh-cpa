@@ -23,6 +23,7 @@ import {
   CpaAdapter,
   parseCpaTraceId,
 } from './src/core/adapter.js'
+import { selectCpaModels } from './src/core/router.js'
 import {
   cpaRoot,
   EXECUTION_STATUS_PATH,
@@ -312,6 +313,107 @@ test('CpaAdapter reports failed executions with the actual account', async () =>
     assert.equal(captured.model, 'gpt-5')
     assert.equal(captured.purpose, 'code')
     assert.equal(captured.outcome, 'failure')
+  } finally {
+    await new Promise(resolve => server.close(resolve))
+  }
+})
+
+test('selectCpaModels keeps the requested model first and prefers healthy quota candidates', () => {
+  const selected = selectCpaModels({
+    model: 'requested',
+    messages: [],
+    reasoningEffort: undefined,
+    maxTokens: 1024,
+  }, {
+    models: [
+      { id: 'low-quota', contextLength: 16_384 },
+      { id: 'healthy', contextLength: 16_384 },
+    ],
+    accounts: [
+      { authIndex: 'low', modelAliases: ['low-quota'] },
+      { authIndex: 'high', modelAliases: ['healthy'] },
+    ],
+    quota: {
+      low: {
+        status: 'low',
+        windows: [{ id: 'low-quota', label: 'low-quota', remainingPercent: 10, exhausted: false }],
+      },
+      high: {
+        status: 'high',
+        windows: [{ id: 'healthy', label: 'healthy', remainingPercent: 90, exhausted: false }],
+      },
+    },
+    defaultContextWindow: 16_384,
+    defaultMaxTokens: 1024,
+  })
+  assert.deepEqual(selected, ['requested', 'healthy', 'low-quota'])
+})
+
+test('CpaAdapter falls back before emitting a partial stream', async () => {
+  let calls = 0
+  const server = createServer((_req, res) => {
+    calls += 1
+    if (calls === 1) {
+      res.writeHead(429, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: { message: 'quota exceeded' } }))
+      return
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.end('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const { port } = server.address()
+    const adapter = new CpaAdapter({
+      baseURL: `http://127.0.0.1:${port}/v1`,
+      provider: 'cpa',
+      getModels: () => [],
+      resolveApiKey: () => Promise.resolve('sk-test'),
+      resolveRoute: async () => ['requested', 'fallback'],
+    })
+    const events = []
+    for await (const event of adapter.stream({
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+      model: 'requested',
+    })) {
+      events.push(event)
+    }
+    assert.equal(calls, 2)
+    assert.equal(events.some(event => event.type === 'text-delta' && event.text === 'ok'), true)
+  } finally {
+    await new Promise(resolve => server.close(resolve))
+  }
+})
+
+test('CpaAdapter does not replay a request after stream content starts', async () => {
+  let calls = 0
+  const server = createServer((_req, res) => {
+    calls += 1
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.end('data: {"choices":[{"delta":{"content":"partial"}}]}\n')
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const { port } = server.address()
+    const adapter = new CpaAdapter({
+      baseURL: `http://127.0.0.1:${port}/v1`,
+      provider: 'cpa',
+      getModels: () => [],
+      resolveApiKey: () => Promise.resolve('sk-test'),
+      resolveRoute: async () => ['requested', 'fallback'],
+    })
+    await assert.rejects(
+      async () => {
+        for await (const _event of adapter.stream({
+          messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+          model: 'requested',
+        })) {
+          // Consume the generator so the incomplete stream is observed.
+        }
+      },
+      /stream ended without \[DONE\]/,
+    )
+    assert.equal(calls, 1)
   } finally {
     await new Promise(resolve => server.close(resolve))
   }

@@ -841,6 +841,13 @@ export class CpaQuotaService {
     this.options = options
   }
 
+  snapshot(): CpaQuotaStatus {
+    return {
+      accounts: this.accounts.map(publicAccount),
+      quota: Object.fromEntries(this.quota),
+    }
+  }
+
   async ensureAccounts(now = Date.now()): Promise<CpaAccount[]> {
     const ttl = optionValue(this.options.authFilesTtlMs) ?? 30_000
     if (now - this.accountsFetchedAt < ttl) return this.accounts
@@ -920,15 +927,12 @@ export class CpaQuotaService {
 
   async status(): Promise<CpaQuotaStatus> {
     const now = Date.now()
-    const accounts = await this.ensureAccounts(now)
+    await this.ensureAccounts(now)
     try {
       await this.refreshQuota(now)
     } catch {
       // Quota is best-effort; keep cached account data available.
     }
-    return {
-      accounts: accounts.map(publicAccount),
-      quota: Object.fromEntries(this.quota),
-    }
+    return this.snapshot()
   }
 }

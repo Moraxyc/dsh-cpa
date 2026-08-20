@@ -43,6 +43,7 @@ import { CpaDataService } from './data.js'
 import { installManagementPanelWhenReady } from './management.js'
 import type { CpaControllerState } from './management.js'
 import { CpaQuotaService } from './quota.js'
+import { selectCpaModels } from '../core/router.js'
 
 export interface CpaRuntimeContext {
   get<T>(key: string): T | undefined
@@ -223,6 +224,7 @@ export class CpaController {
       defaultMaxTokens: options.defaultMaxTokens,
       getModels: () => this.models,
       resolveApiKey: resolveApiKey(ctx, options.apiKeyRef, () => this.currentApiKey()),
+      resolveRoute: options => this.resolveRoute(options),
       onExecution: execution => this.recordExecution(execution),
     })
     this.executionStore = new CpaExecutionStore(settings.executionsPath || options.executionsPath)
@@ -250,6 +252,19 @@ export class CpaController {
 
   currentApiKey(): string {
     return this.apiKey || ''
+  }
+
+  async resolveRoute(options: Parameters<typeof selectCpaModels>[0]): Promise<readonly string[]> {
+    const status = this.managementKey
+      ? await this.quotaService.status()
+      : this.quotaService.snapshot()
+    return selectCpaModels(options, {
+      models: this.models,
+      accounts: status.accounts,
+      quota: status.quota,
+      defaultContextWindow: this.options.defaultContextWindow,
+      defaultMaxTokens: this.options.defaultMaxTokens,
+    })
   }
 
   getState(): CpaControllerState {

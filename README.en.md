@@ -46,6 +46,20 @@ missing, enter an absolute path in the internal CPA setting.
 
 Models sync from `/v1/models` every 5 minutes.
 
+## Agent Routing and Failover
+
+When an agent request enters the `cpa` provider, the plugin builds a candidate
+order from CPA's synchronized model capabilities, context windows, available
+models per account, and quota snapshot. The requested model always stays first.
+Only a request that has not emitted stream content may fall through to another
+candidate, and only for quota, rate-limit, server, transport, or empty-response
+failures. Once content has started, the request is never replayed, preventing
+duplicate agent output or side effects.
+
+Credential ownership and account switching remain inside CPA. The plugin
+consumes sanitized account and quota data without reimplementing CPA account
+management.
+
 ## Settings Panel
 
 The CPA page uses dsh web-app components and supports internal and

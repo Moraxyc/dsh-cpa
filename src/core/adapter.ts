@@ -34,6 +34,18 @@ import { isFunction, isJsonRecord, isNonEmptyString, isString } from './json.js'
 
 const DONE = '[DONE]'
 const EMPTY_RESPONSE = EMPTY_RESPONSE_CODE
+const FALLBACK_ERROR_CODES = new Set([
+  'QUOTA',
+  'RATE_LIMIT',
+  'SERVER',
+  'TRANSPORT',
+  'EMPTY_RESPONSE',
+  'STREAM_CLOSED',
+  'HTTP_408',
+  'HTTP_502',
+  'HTTP_503',
+  'HTTP_504',
+])
 
 export interface CpaTrace {
   traceId: string
@@ -61,6 +73,7 @@ export interface CpaAdapterOptions {
   defaultMaxTokens: number
   getModels: () => CpaModel[]
   resolveApiKey: () => Promise<string>
+  resolveRoute?: (options: GenerateOptions) => Promise<readonly string[]>
   onExecution?: (execution: CpaExecutionEvent) => void | Promise<void>
 }
 
@@ -555,6 +568,34 @@ export class CpaAdapter extends LlmAdapter {
   }
 
   override async * stream(options: GenerateOptions): AsyncGenerator<StreamChunk> {
+    let models: readonly string[] = [options.model]
+    try {
+      const resolved = await this.options.resolveRoute?.(options)
+      if (resolved !== undefined && resolved.length > 0) {
+        models = [...new Set([options.model, ...resolved])]
+      }
+    } catch {
+      // Routing is advisory; a stale or unavailable management API must not block chat.
+    }
+
+    let lastError: unknown
+    for (const model of models) {
+      let emitted = false
+      try {
+        for await (const event of this.streamAttempt({ ...options, model })) {
+          emitted = true
+          yield event
+        }
+        return
+      } catch (error) {
+        lastError = error
+        if (emitted || !isFallbackError(error) || model === models[models.length - 1]) throw error
+      }
+    }
+    if (lastError !== undefined) throw lastError
+  }
+
+  private async * streamAttempt(options: GenerateOptions): AsyncGenerator<StreamChunk> {
     const apiKey = await this.options.resolveApiKey()
     const url = chatCompletionsUrl(this.options.baseURL)
     const body = serializeRequest(options)
@@ -631,6 +672,11 @@ export class CpaAdapter extends LlmAdapter {
       }
     }
   }
+}
+
+function isFallbackError(cause: unknown): boolean {
+  if (!isJsonRecord(cause) || !isString(cause.code)) return false
+  return FALLBACK_ERROR_CODES.has(cause.code)
 }
 
 export function resolveApiKey(
