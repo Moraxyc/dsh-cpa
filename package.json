@@ -1,6 +1,6 @@
 {
   "name": "dsh-cpa",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "DSH CPA provider and runtime plugin",
   "keywords": [
     "dsh-plugin",
