@@ -1,7 +1,7 @@
 import {
   assertUsableApiKey,
   attributionHeaders,
-  CallId,
+  ToolCallId,
   contentHasImage,
   EMPTY_RESPONSE_CODE,
   isContextWindowExceededError,
@@ -87,7 +87,7 @@ export interface WireMessage {
   role: string
   content: string
   tool_calls?: WireToolCall[]
-  tool_call_id?: CallId
+  tool_call_id?: ToolCallId
 }
 
 export interface WireTool {
@@ -390,7 +390,7 @@ function closeBlock(block: Block): ContentBlock {
     case 'reasoning': return { type: 'reasoning', text: block.text }
     case 'tool-call': return {
       type: 'tool-call',
-      id: CallId(block.callId ?? ''),
+      id: ToolCallId(block.callId ?? ''),
       name: block.name ?? '',
       arguments: block.text,
     }
@@ -480,7 +480,7 @@ export async function* translate(payloads: AsyncIterable<string>): AsyncGenerato
         const deltaEvent: StreamChunk = {
           type: 'tool-call-delta',
           index: block.index,
-          id: CallId(block.callId ?? ''),
+          id: ToolCallId(block.callId ?? ''),
           argumentsDelta: fragment,
         }
         if (block.name !== undefined) deltaEvent.name = block.name
