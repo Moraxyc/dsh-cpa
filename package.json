@@ -38,7 +38,7 @@
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-client-ui-primitives": "^0.1.2-alpha.5",
-    "@deepseek-ai/dsh-llm": "^0.1.2-alpha.4"
+    "@deepseek-ai/dsh-llm": "^0.1.2-alpha.5"
   },
   "engines": {
     "node": ">=24.20.0"
