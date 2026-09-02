@@ -56,7 +56,7 @@
   },
   "devDependencies": {
     "@oxlint/plugins": "^1.81.0",
-    "@types/node": "^26.4.0",
+    "@types/node": "^26.4.1",
     "@types/react": "^19.2.18",
     "oxlint": "^1.81.0",
     "typescript": "^7.0.2"
