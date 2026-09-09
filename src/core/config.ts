@@ -19,6 +19,7 @@ export const DEFAULT_AUTH_FILES_TTL_MS = 30_000
 export const DEFAULT_QUOTA_TTL_MS = 60_000
 export const DEFAULT_QUOTA_CONCURRENCY = 4
 export const DEFAULT_ROUTING_STRATEGY = 'balanced'
+export const DEFAULT_DAILY_REQUEST_LIMIT = 0
 
 export type CpaMode = 'internal' | 'external' | 'off'
 export type CpaRoutingStrategy = 'balanced' | 'quality' | 'availability' | 'quota'
@@ -32,6 +33,7 @@ export interface CpaSettings {
   internalBin: string
   usageStatisticsEnabled: boolean
   routingStrategy: CpaRoutingStrategy
+  dailyRequestLimit: number
   refreshIntervalMs: number
   port: number
   configPath: string
@@ -71,6 +73,7 @@ export interface CpaSettingsInput {
   internalBin?: ConfigScalar
   usageStatisticsEnabled?: ConfigScalar
   routingStrategy?: ConfigScalar
+  dailyRequestLimit?: ConfigScalar
   refreshIntervalMs?: ConfigScalar
   port?: ConfigScalar
   configPath?: ConfigScalar
@@ -184,6 +187,11 @@ export function positiveNumber(value: ConfigScalar, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
+function nonNegativeNumber(value: ConfigScalar, fallback: number): number {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback
+}
+
 function errorCode(cause: unknown): string | undefined {
   if (!isJsonRecord(cause)) return undefined
   const code = cause.code
@@ -208,6 +216,7 @@ export function sanitizeCpaSettings(value: CpaSettingsInput | null | undefined):
       || source.routingStrategy === 'quota'
       ? source.routingStrategy
       : DEFAULT_ROUTING_STRATEGY,
+    dailyRequestLimit: nonNegativeNumber(source.dailyRequestLimit, DEFAULT_DAILY_REQUEST_LIMIT),
     refreshIntervalMs: positiveNumber(source.refreshIntervalMs, DEFAULT_REFRESH_MS),
     port: Number.isInteger(Number(source.port)) && Number(source.port) > 0
       ? Number(source.port)

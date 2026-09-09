@@ -53,6 +53,7 @@ export interface CpaControllerState {
   bin: string
   usageStatisticsEnabled: boolean
   routingStrategy: CpaRoutingStrategy
+  dailyRequestLimit: number
   refreshIntervalMs: number
   port: number
   configPath: string
@@ -80,6 +81,11 @@ export interface CpaDiagnostics {
   quota: CpaQuotaStatus['quota']
   modelAccounts: Record<string, string[]>
   localUsage: LocalUsageSummary
+  budget: {
+    dailyRequestLimit: number
+    requests: number
+    exceeded: boolean
+  }
   errors: string[]
 }
 
@@ -394,6 +400,11 @@ function emptyDiagnostics(): CpaDiagnostics {
         successRate: 0,
       },
       models: [],
+    },
+    budget: {
+      dailyRequestLimit: 0,
+      requests: 0,
+      exceeded: false,
     },
     errors: [],
   }

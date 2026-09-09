@@ -4,6 +4,7 @@ import type { CpaExecutionEvent } from '../core/adapter.js'
 import {
   assertCpaBinary,
   DEFAULT_AUTH_FILES_TTL_MS,
+  DEFAULT_DAILY_REQUEST_LIMIT,
   DEFAULT_PORT,
   DEFAULT_QUOTA_CONCURRENCY,
   DEFAULT_QUOTA_TTL_MS,
@@ -96,6 +97,11 @@ function positiveInteger(value: ConfigScalar, fallback: number): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
 }
 
+function nonNegativeNumber(value: ConfigScalar, fallback: number): number {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback
+}
+
 function routingStrategy(value: JsonValue | undefined, fallback: CpaRoutingStrategy): CpaRoutingStrategy {
   return value === 'quality' || value === 'availability' || value === 'quota' || value === 'balanced'
     ? value
@@ -154,6 +160,7 @@ export function resolveInitialCpaSettings(
     internalBin: options.bin || '',
     usageStatisticsEnabled: true,
     routingStrategy: DEFAULT_ROUTING_STRATEGY,
+    dailyRequestLimit: DEFAULT_DAILY_REQUEST_LIMIT,
     refreshIntervalMs: options.refreshIntervalMs ?? DEFAULT_REFRESH_MS,
     port: options.port ?? DEFAULT_PORT,
     configPath: options.configPath || '',
@@ -173,6 +180,7 @@ export function resolveInitialCpaSettings(
     internalBin: persisted.internalBin || initial.internalBin || '',
     usageStatisticsEnabled: persisted.usageStatisticsEnabled !== false,
     routingStrategy: routingStrategy(persisted.routingStrategy, initial.routingStrategy),
+    dailyRequestLimit: persisted.dailyRequestLimit ?? initial.dailyRequestLimit,
     refreshIntervalMs: persisted.refreshIntervalMs || initial.refreshIntervalMs,
     port: persisted.port || initial.port,
     configPath: persisted.configPath || initial.configPath,
@@ -210,6 +218,9 @@ export function mergeCpaSettings(current: CpaSettings, patch: JsonRecord): CpaSe
       throw new Error('invalid routing strategy')
     }
   }
+  if (patch.dailyRequestLimit !== undefined) {
+    next.dailyRequestLimit = nonNegativeNumber(scalar(patch.dailyRequestLimit), next.dailyRequestLimit)
+  }
   if (patch.refreshIntervalMs !== undefined) next.refreshIntervalMs = positiveNumber(scalar(patch.refreshIntervalMs), next.refreshIntervalMs)
   if (patch.port !== undefined) next.port = positiveInteger(scalar(patch.port), next.port)
   if (patch.authFilesTtlMs !== undefined) next.authFilesTtlMs = positiveNumber(scalar(patch.authFilesTtlMs), next.authFilesTtlMs)
@@ -230,6 +241,7 @@ export function cpaSettingsEqual(left: CpaSettings, right: CpaSettings): boolean
     && left.internalBin === right.internalBin
     && left.usageStatisticsEnabled === right.usageStatisticsEnabled
     && left.routingStrategy === right.routingStrategy
+    && left.dailyRequestLimit === right.dailyRequestLimit
     && left.refreshIntervalMs === right.refreshIntervalMs
     && left.port === right.port
     && left.configPath === right.configPath
@@ -330,6 +342,9 @@ export class CpaController {
         quotaError = 'management data unavailable'
       }
     }
+    const localUsage = this.executionStore.localUsage()
+    const budgetExceeded = this.settings.dailyRequestLimit > 0
+      && localUsage.totals.totalRequests >= this.settings.dailyRequestLimit
     const checks: CpaDiagnosticCheck[] = [
       {
         id: 'runtime',
@@ -369,6 +384,15 @@ export class CpaController {
           ? quotaError || 'no quota snapshot available'
           : `${Object.values(status.quota).length} quota reports available`,
       },
+      {
+        id: 'budget',
+        status: this.settings.dailyRequestLimit <= 0
+          ? 'unknown'
+          : budgetExceeded ? 'warn' : 'pass',
+        detail: this.settings.dailyRequestLimit <= 0
+          ? 'daily request alert is disabled'
+          : `${localUsage.totals.totalRequests}/${this.settings.dailyRequestLimit} requests in the last 24 hours`,
+      },
     ]
     const errors: string[] = []
     if (this.lastError) errors.push(this.lastError.slice(0, 200))
@@ -382,7 +406,12 @@ export class CpaController {
       accounts: status.accounts,
       quota: status.quota,
       modelAccounts: modelAccounts(this.models, status.accounts),
-      localUsage: this.executionStore.localUsage(),
+      localUsage,
+      budget: {
+        dailyRequestLimit: this.settings.dailyRequestLimit,
+        requests: localUsage.totals.totalRequests,
+        exceeded: budgetExceeded,
+      },
       errors,
     }
   }
@@ -403,6 +432,7 @@ export class CpaController {
       bin: this.settings.internalBin || this.options.bin,
       usageStatisticsEnabled: this.settings.usageStatisticsEnabled,
       routingStrategy: this.settings.routingStrategy,
+      dailyRequestLimit: this.settings.dailyRequestLimit,
       refreshIntervalMs: this.settings.refreshIntervalMs,
       port: this.settings.port,
       configPath: this.settings.configPath,

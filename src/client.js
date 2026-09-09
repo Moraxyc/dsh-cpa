@@ -936,6 +936,7 @@ window.__ModuleLoader__.load({
       const [internalBin, setInternalBin] = useState('')
       const [usageStatisticsEnabled, setUsageStatisticsEnabled] = useState(true)
       const [routingStrategy, setRoutingStrategy] = useState('balanced')
+      const [dailyRequestLimit, setDailyRequestLimit] = useState('0')
       const [refreshIntervalMs, setRefreshIntervalMs] = useState('300000')
       const [port, setPort] = useState('8317')
       const [configPath, setConfigPath] = useState('')
@@ -965,6 +966,7 @@ window.__ModuleLoader__.load({
               setInternalBin(body.bin || '')
               setUsageStatisticsEnabled(body.usageStatisticsEnabled !== false)
               setRoutingStrategy(body.routingStrategy || 'balanced')
+              setDailyRequestLimit(String(body.dailyRequestLimit ?? 0))
               setRefreshIntervalMs(String(body.refreshIntervalMs ?? 300000))
               setPort(String(body.port ?? 8317))
               setConfigPath(body.configPath || '')
@@ -1030,12 +1032,12 @@ window.__ModuleLoader__.load({
           }),
         )
       }
-      function numberField(label, value, onChange) {
+      function numberField(label, value, onChange, min = '1') {
         return React.createElement('div', { style: fieldStyle },
           React.createElement('label', { style: labelStyle }, label),
           React.createElement(Input, {
             type: 'number',
-            min: '1',
+            min,
             step: '1',
             value,
             onChange,
@@ -1198,6 +1200,7 @@ window.__ModuleLoader__.load({
               React.createElement('option', { value: 'quota' }, '额度：优先剩余额度'),
             ),
           ),
+          numberField('每日请求提醒（0=关闭）', dailyRequestLimit, event => setDailyRequestLimit(event.target.value), '0'),
           numberField('模型刷新间隔 (ms)', refreshIntervalMs, event => setRefreshIntervalMs(event.target.value)),
           numberField('auth-files 缓存 (ms)', authFilesTtlMs, event => setAuthFilesTtlMs(event.target.value)),
           numberField('quota 缓存 (ms)', quotaTtlMs, event => setQuotaTtlMs(event.target.value)),
@@ -1257,6 +1260,7 @@ window.__ModuleLoader__.load({
         }
         payload.refreshIntervalMs = Number(refreshIntervalMs)
         payload.routingStrategy = routingStrategy
+        payload.dailyRequestLimit = Number(dailyRequestLimit)
         if (mode === 'internal') {
           payload.port = Number(port)
           if (configPath.trim() !== '') payload.configPath = configPath.trim()
@@ -1280,6 +1284,7 @@ window.__ModuleLoader__.load({
           setInternalBin(body.bin || '')
           setUsageStatisticsEnabled(body.usageStatisticsEnabled !== false)
           setRoutingStrategy(body.routingStrategy || 'balanced')
+          setDailyRequestLimit(String(body.dailyRequestLimit ?? dailyRequestLimit))
           setRefreshIntervalMs(String(body.refreshIntervalMs ?? refreshIntervalMs))
           setPort(String(body.port ?? port))
           setConfigPath(body.configPath || configPath)
@@ -1340,6 +1345,9 @@ window.__ModuleLoader__.load({
         : {}
       const localUsage = diagnostics?.localUsage && typeof diagnostics.localUsage === 'object'
         ? diagnostics.localUsage
+        : null
+      const budget = diagnostics?.budget && typeof diagnostics.budget === 'object'
+        ? diagnostics.budget
         : null
       const statusLabel = diagnostics?.status === 'healthy'
         ? '正常'
@@ -1418,6 +1426,14 @@ window.__ModuleLoader__.load({
               React.createElement('span', { className: 'dsh-cpa-summary-key' }, '保留记录'),
               React.createElement('span', { className: 'dsh-cpa-summary-value' }, formatSummaryNumber(localUsage.retainedRecords)),
             ),
+            budget && summaryNumber(budget.dailyRequestLimit) > 0
+              ? React.createElement('span', { className: 'dsh-cpa-summary-item' },
+                React.createElement('span', { className: 'dsh-cpa-summary-key' }, '请求提醒'),
+                React.createElement('span', {
+                  className: `dsh-cpa-summary-value${budget.exceeded === true ? ' dsh-cpa-summary-list-warning' : ''}`,
+                }, `${formatSummaryNumber(budget.requests)}/${formatSummaryNumber(budget.dailyRequestLimit)}`),
+              )
+              : null,
           ),
         )
         : null

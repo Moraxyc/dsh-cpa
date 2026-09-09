@@ -60,6 +60,7 @@ import {
 
 const DEFAULT_ADVANCED_SETTINGS = Object.freeze({
   routingStrategy: 'balanced',
+  dailyRequestLimit: 0,
   refreshIntervalMs: 300_000,
   port: 8317,
   configPath: '',
@@ -988,6 +989,7 @@ test('cpa settings merge and initial resolution control runtime mode', () => {
     quotaTtlMs: 2_000,
     quotaConcurrency: 2,
     routingStrategy: 'quota',
+    dailyRequestLimit: 100,
   })
   assert.deepEqual(merged, {
     mode: 'external',
@@ -1005,6 +1007,7 @@ test('cpa settings merge and initial resolution control runtime mode', () => {
     quotaTtlMs: 2_000,
     quotaConcurrency: 2,
     routingStrategy: 'quota',
+    dailyRequestLimit: 100,
   })
   assert.equal(cpaSettingsEqual(merged, { ...merged }), true)
   const disabled = mergeCpaSettings(merged, { usageStatisticsEnabled: false })

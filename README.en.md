@@ -83,6 +83,11 @@ Advanced settings also expose balanced, quality, availability, and quota-first
 routing strategies. The strategy only changes dsh-cpa candidate ordering; CPA
 continues to own credentials and account switching.
 
+"Daily request alert" is a soft budget threshold, disabled by default with
+`0`. Reaching it produces a diagnostics/settings warning but does not silently
+block requests. CPA does not expose a uniform price model, so the plugin does
+not invent a monetary estimate.
+
 ## Usage Status
 
 The plugin parses `x-cpa-trace-id` from successful and failed responses, writes sanitized
