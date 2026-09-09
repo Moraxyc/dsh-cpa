@@ -40,9 +40,11 @@ export interface QuotaWindow {
   remainingPercent: number | null
   resetLabel: string
   exhausted: boolean
+  risk: QuotaRisk
 }
 
 export type QuotaStatus = 'unknown' | 'exhausted' | 'low' | 'medium' | 'high' | 'full'
+export type QuotaRisk = 'unknown' | 'critical' | 'warning' | 'normal'
 
 interface QuotaGroupState {
   remainingPercent: number | null
@@ -56,6 +58,7 @@ export interface CpaQuotaReport {
   label: string
   planType: string
   status: QuotaStatus
+  risk: QuotaRisk
   windows: QuotaWindow[]
   refreshedAt?: string
 }
@@ -166,6 +169,20 @@ export function clampPercent(value: number): number {
   return Math.min(100, Math.max(0, value))
 }
 
+export function deriveQuotaRisk(remainingPercent: number | null, exhausted: boolean): QuotaRisk {
+  if (exhausted || remainingPercent !== null && remainingPercent <= 5) return 'critical'
+  if (remainingPercent === null) return 'unknown'
+  if (remainingPercent <= 20) return 'warning'
+  return 'normal'
+}
+
+function reportRisk(windows: readonly QuotaWindow[]): QuotaRisk {
+  if (windows.some(window => window.risk === 'critical')) return 'critical'
+  if (windows.some(window => window.risk === 'warning')) return 'warning'
+  if (windows.some(window => window.risk === 'normal')) return 'normal'
+  return 'unknown'
+}
+
 export function formatResetLabel(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return ''
   const date = new Date(value * 1000)
@@ -238,12 +255,14 @@ function normalizeCodexWindow(id: string, label: string, window: JsonRecord, exh
   const remainingPercent = used === null
     ? (exhausted && hasReset ? 0 : null)
     : clampPercent(100 - used)
+  const isExhausted = used !== null ? used >= 100 : (exhausted && hasReset)
   return {
     id,
     label,
     remainingPercent,
     resetLabel: formatResetLabel(reset),
-    exhausted: used !== null ? used >= 100 : (exhausted && hasReset),
+    exhausted: isExhausted,
+    risk: deriveQuotaRisk(remainingPercent, isExhausted),
   }
 }
 
@@ -266,6 +285,7 @@ export function normalizeGeminiWindows(payload: QuotaApiPayload | null | undefin
         remainingPercent,
         resetLabel: reset,
         exhausted: remaining !== null && remaining <= 0,
+        risk: deriveQuotaRisk(remainingPercent, remaining !== null && remaining <= 0),
       })
       continue
     }
@@ -283,7 +303,12 @@ export function normalizeGeminiWindows(payload: QuotaApiPayload | null | undefin
   for (const group of GEMINI_GROUPS) {
     const current = groups.get(group.id)
     if (current === undefined) continue
-    windows.push({ id: group.id, label: group.label, ...current })
+    windows.push({
+      id: group.id,
+      label: group.label,
+      ...current,
+      risk: deriveQuotaRisk(current.remainingPercent, current.exhausted),
+    })
   }
   extras.sort((left, right) => left.label.localeCompare(right.label))
   windows.push(...extras)
@@ -320,12 +345,14 @@ export function normalizeAntigravityWindows(payload: QuotaApiPayload | null | un
     const remaining = compactNumber(firstScalar(quota, ['remainingFraction', 'remaining_fraction', 'remaining']), null)
     const remainingPercent = remaining === null ? null : clampPercent(remaining * 100)
     const reset = formatResetLabel(compactNumber(firstScalar(quota, ['resetTime', 'reset_time']), 0) ?? 0)
+    const exhausted = remaining !== null && remaining <= 0
     windows.push({
       id: modelId,
       label: isString(entry.displayName) ? entry.displayName : modelId,
       remainingPercent,
       resetLabel: reset,
-      exhausted: remaining !== null && remaining <= 0,
+      exhausted,
+      risk: deriveQuotaRisk(remainingPercent, exhausted),
     })
   }
   return windows
@@ -353,6 +380,7 @@ export function normalizeQuotaReport(
     label,
     planType: planType || '',
     status,
+    risk: reportRisk(windows),
     windows,
     refreshedAt: now.toISOString(),
   }

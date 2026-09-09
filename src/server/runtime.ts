@@ -337,7 +337,7 @@ export class CpaController {
           ? 'warn'
           : Object.values(status.quota).length === 0
             ? 'unknown'
-            : Object.values(status.quota).some(report => report.status === 'exhausted')
+            : Object.values(status.quota).some(report => report.risk === 'critical' || report.risk === 'warning')
               ? 'warn'
               : 'pass',
         detail: quotaError

@@ -43,6 +43,7 @@ import {
 } from './src/server/runtime.js'
 import {
   CpaQuotaService,
+  deriveQuotaRisk,
   formatResetLabel,
   normalizeAntigravityWindows,
   normalizeGeminiWindows,
@@ -993,6 +994,7 @@ test('quota normalizers reduce provider payloads to compact windows', () => {
     },
   }, now)
   assert.equal(codex.status, 'medium')
+  assert.equal(codex.risk, 'normal')
   assert.deepEqual(
     codex.windows.map(window => [window.id, window.remainingPercent]),
     [['code-5h', 60], ['code-7d', 80]],
@@ -1009,6 +1011,7 @@ test('quota normalizers reduce provider payloads to compact windows', () => {
     gemini.map(window => [window.id, window.remainingPercent]),
     [['gemini-flash-series', 20], ['gemini-pro-series', 50]],
   )
+  assert.equal(gemini.find(window => window.id === 'gemini-flash-series').risk, 'warning')
 
   const antigravity = normalizeAntigravityWindows({
     models: {
@@ -1024,7 +1027,11 @@ test('quota normalizers reduce provider payloads to compact windows', () => {
   )
   const unknown = normalizeQuotaReport('codex', 'Codex', 'auth-x', 'plus', null, now)
   assert.equal(unknown.status, 'unknown')
+  assert.equal(unknown.risk, 'unknown')
   assert.deepEqual(unknown.windows, [])
+  assert.equal(deriveQuotaRisk(5, false), 'critical')
+  assert.equal(deriveQuotaRisk(20, false), 'warning')
+  assert.equal(deriveQuotaRisk(null, false), 'unknown')
   assert.match(formatResetLabel(1_700_000_000), /^\d{2}-\d{2} \d{2}:\d{2}$/)
 })
 

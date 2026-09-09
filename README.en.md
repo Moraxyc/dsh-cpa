@@ -60,6 +60,8 @@ Routing also performs a request preflight and records model-catalog, reasoning,
 context-window, account-health, and quota risks. Each attempt stores the
 candidate route, preflight result, failure code, and fallback source; the
 composer CPA readout shows the actual attempt chain and fallback reason.
+Quota windows share normal, warning, critical, and unknown risk labels that are
+also used by candidate routing.
 
 Credential ownership and account switching remain inside CPA. The plugin
 consumes sanitized account and quota data without reimplementing CPA account

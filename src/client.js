@@ -361,7 +361,13 @@ window.__ModuleLoader__.load({
 
     function quotaText(window) {
       const percent = windowPercent(window)
-      return window && percent !== null ? `${window.label} ${Math.round(percent)}%` : ''
+      if (!window || percent === null) return ''
+      const risk = window.risk === 'critical'
+        ? ' · 风险高'
+        : window.risk === 'warning'
+          ? ' · 额度偏低'
+          : ''
+      return `${window.label} ${Math.round(percent)}%${risk}`
     }
 
     function accountCore(account) {
@@ -693,7 +699,7 @@ window.__ModuleLoader__.load({
       if (accountStatus(account) !== '') return true
       if (positiveCount(account.failed) > 0) return true
       const window = preferredWindow(reportWindows(quota, account.authIndex))
-      return Boolean(window && windowPercent(window) <= 5)
+      return Boolean(window && (window.risk === 'critical' || windowPercent(window) <= 5))
     }
 
     function shouldShowReadout(readout, execution) {
