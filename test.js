@@ -26,6 +26,7 @@ import {
 import { planCpaRoute, selectCpaModels } from './src/core/router.js'
 import {
   cpaRoot,
+  DIAGNOSTICS_PATH,
   EXECUTION_STATUS_PATH,
   installManagementPanelWhenReady,
   managementCookieValue,
@@ -547,6 +548,7 @@ test('management panel registers status and proxy routes', () => {
       ['exact', STATUS_PATH],
       ['exact', EXECUTION_STATUS_PATH],
       ['exact', SUMMARY_PATH],
+      ['exact', DIAGNOSTICS_PATH],
       ['exact', SETTINGS_PATH],
       ['prefix', PANEL_PATH],
     ],
@@ -605,6 +607,54 @@ test('summary route returns a safe shape without a management key', async () => 
   assert.equal(body.instance.latestVersion, '')
   assert.equal(body.usage.totals.totalRequests, 0)
   assert.equal(summaryCalls, 0)
+})
+
+test('diagnostics route returns sanitized CPA health data', async () => {
+  const routes = []
+  const server = {
+    register(route) {
+      routes.push(route)
+      return () => {}
+    },
+  }
+  const ctx = {
+    get(key) {
+      return key === 'webServer' ? server : undefined
+    },
+    logger: { warn() {} },
+  }
+  const diagnostics = {
+    available: true,
+    status: 'warning',
+    fetchedAt: '2026-01-01T00:00:00.000Z',
+    checks: [{ id: 'quota', status: 'warn', detail: 'quota is low' }],
+    models: [{ id: 'gpt-5', contextLength: 128_000 }],
+    accounts: [{ authIndex: 'auth-1', label: 'one' }],
+    quota: { 'auth-1': { status: 'low' } },
+    modelAccounts: { 'gpt-5': ['auth-1'] },
+    errors: [],
+  }
+  installManagementPanelWhenReady(ctx, {
+    baseURL: () => 'http://127.0.0.1:8317/v1',
+    managementKey: () => 'mgmt-test',
+    diagnostics: async () => diagnostics,
+  })
+  const route = routes.find(route => route.path === DIAGNOSTICS_PATH)
+  const req = Readable.from([])
+  req.method = 'GET'
+  req.headers = {}
+  const res = {
+    writeHead(status, headers) {
+      this.status = status
+      this.headers = headers
+    },
+    end(body) {
+      this.body = body
+    },
+  }
+  await route.handler(req, res)
+  assert.equal(res.status, 200)
+  assert.deepEqual(JSON.parse(res.body), diagnostics)
 })
 
 test('management proxy blocks browser access to api-call', async () => {

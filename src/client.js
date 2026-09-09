@@ -17,6 +17,7 @@ window.__ModuleLoader__.load({
 
     const SETTINGS_URL = '/dsh-cpa/settings'
     const SUMMARY_URL = '/dsh-cpa/summary'
+    const DIAGNOSTICS_URL = '/dsh-cpa/diagnostics'
     const PANEL_URL = '/dsh-cpa/management'
     const EXECUTION_STATUS_URL = '/dsh-cpa/execution-status'
     const STYLE_ID = 'dsh-cpa-client'
@@ -586,6 +587,15 @@ window.__ModuleLoader__.load({
       return response.json().catch(() => { throw new Error('CPA 摘要不可用') })
     }
 
+    async function fetchCpaDiagnostics() {
+      const response = await fetch(DIAGNOSTICS_URL, {
+        headers: { accept: 'application/json' },
+        cache: 'no-store',
+      })
+      if (!response.ok) throw new Error('CPA 诊断不可用')
+      return response.json().catch(() => { throw new Error('CPA 诊断不可用') })
+    }
+
     function summaryNumber(value) {
       const number = Number(value)
       return Number.isFinite(number) ? number : 0
@@ -1054,6 +1064,10 @@ window.__ModuleLoader__.load({
           active: state.active,
           managementAvailable: state.managementAvailable,
         }),
+        React.createElement(CpaDiagnostics, {
+          active: state.active,
+          managementAvailable: state.managementAvailable,
+        }),
         React.createElement('div', { style: rowStyle },
           React.createElement(Pill, {
             active: mode === 'internal',
@@ -1250,6 +1264,77 @@ window.__ModuleLoader__.load({
           setBusy(false)
         }
       }
+    }
+
+    function CpaDiagnostics({ active, managementAvailable }) {
+      const [diagnostics, setDiagnostics] = useState(null)
+      const [error, setError] = useState('')
+      const [refreshing, setRefreshing] = useState(false)
+
+      useEffect(() => {
+        let cancelled = false
+        async function load() {
+          try {
+            const body = await fetchCpaDiagnostics()
+            if (!cancelled) {
+              setDiagnostics(body)
+              setError('')
+            }
+          } catch {
+            if (!cancelled) setError('CPA 诊断不可用')
+          }
+        }
+        void load()
+        return () => { cancelled = true }
+      }, [active, managementAvailable])
+
+      async function refresh() {
+        setRefreshing(true)
+        setError('')
+        try {
+          setDiagnostics(await fetchCpaDiagnostics())
+        } catch {
+          setError('CPA 诊断不可用')
+        } finally {
+          setRefreshing(false)
+        }
+      }
+
+      const checks = Array.isArray(diagnostics?.checks) ? diagnostics.checks : []
+      const statusLabel = diagnostics?.status === 'healthy'
+        ? '正常'
+        : diagnostics?.status === 'warning'
+          ? '需注意'
+          : '不可用'
+      const statusWarning = diagnostics?.status !== 'healthy'
+      const header = React.createElement('div', { className: 'dsh-cpa-summary-header' },
+        React.createElement('span', { className: 'dsh-cpa-summary-title' }, 'CPA 连接诊断'),
+        React.createElement(Button, {
+          variant: 'outline',
+          size: 'sm',
+          onClick: () => { void refresh() },
+          disabled: refreshing,
+        }, refreshing ? '刷新中' : '重新检查'),
+      )
+      const checkList = checks.length > 0
+        ? React.createElement('div', { className: 'dsh-cpa-summary-list' },
+          checks.map((check, index) => React.createElement('div', {
+            className: `dsh-cpa-summary-list-row${check?.status === 'pass' ? '' : ' dsh-cpa-summary-list-warning'}`,
+            key: check?.id || index,
+          },
+            React.createElement('span', { className: 'dsh-cpa-summary-list-main' }, check?.id || '检查'),
+            React.createElement('span', null, check?.detail || ''),
+          )),
+        )
+        : React.createElement('div', { className: 'dsh-cpa-summary-status' }, error || '诊断加载中')
+
+      return React.createElement('div', { className: 'dsh-cpa-summary' },
+        header,
+        React.createElement('div', {
+          className: `dsh-cpa-summary-status${statusWarning ? ' dsh-cpa-summary-status-warning' : ''}`,
+        }, error || statusLabel),
+        checkList,
+      )
     }
 
     function apply(ctx) {

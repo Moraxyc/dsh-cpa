@@ -116,3 +116,8 @@ state, runtime config, usage totals, usage details, and accounts. Composer statu
 details include a "日志" deep link when a recorded `requestId` exists, opening
 CPA's original management log surface. The management panel remains the complete
 management entry point.
+
+The read-only `/dsh-cpa/diagnostics` endpoint returns sanitized runtime, model
+sync, management API, account, and quota checks plus a model-to-account
+availability matrix. The settings page exposes these checks in "CPA Connection
+Diagnostics" with a manual refresh action.

@@ -9,9 +9,11 @@ import { emptyCpaSummary } from './data.js'
 import type { CpaSummary } from './data.js'
 import { optionValue } from './quota.js'
 import type { CpaQuotaStatus, OptionSource } from './quota.js'
+import type { CpaModel } from '../core/config.js'
 
 export const STATUS_PATH = '/dsh-cpa/status'
 export const SUMMARY_PATH = '/dsh-cpa/summary'
+export const DIAGNOSTICS_PATH = '/dsh-cpa/diagnostics'
 export const SETTINGS_PATH = '/dsh-cpa/settings'
 export const PANEL_PATH = '/dsh-cpa/management'
 export const EXECUTION_STATUS_PATH = '/dsh-cpa/execution-status'
@@ -59,6 +61,24 @@ export interface CpaControllerState {
   error: string
 }
 
+export interface CpaDiagnosticCheck {
+  id: string
+  status: 'pass' | 'warn' | 'fail' | 'unknown'
+  detail: string
+}
+
+export interface CpaDiagnostics {
+  available: boolean
+  status: 'healthy' | 'warning' | 'unavailable'
+  fetchedAt: string
+  checks: CpaDiagnosticCheck[]
+  models: CpaModel[]
+  accounts: CpaQuotaStatus['accounts']
+  quota: CpaQuotaStatus['quota']
+  modelAccounts: Record<string, string[]>
+  errors: string[]
+}
+
 export interface ManagementExecutionStore {
   latest(sessionId: string | undefined): ExecutionRecord | undefined
   recent?(sessionId: string | undefined, limit?: number): ExecutionRecord[]
@@ -72,6 +92,7 @@ export interface ManagementPanelOptions {
   executionStore?: ManagementExecutionStore | (() => ManagementExecutionStore)
   quotaService?: { status(): Promise<CpaQuotaStatus> }
   dataService?: { summary(): Promise<CpaSummary> }
+  diagnostics?: () => Promise<CpaDiagnostics>
 }
 
 export interface ManagementContext {
@@ -344,6 +365,38 @@ function summaryHandler(options: ManagementPanelOptions) {
   }
 }
 
+function emptyDiagnostics(): CpaDiagnostics {
+  return {
+    available: false,
+    status: 'unavailable',
+    fetchedAt: new Date().toISOString(),
+    checks: [],
+    models: [],
+    accounts: [],
+    quota: {},
+    modelAccounts: {},
+    errors: [],
+  }
+}
+
+function diagnosticsHandler(options: ManagementPanelOptions) {
+  return async (_req: IncomingMessage, res: ServerResponse) => {
+    if (!options.diagnostics) {
+      sendJson(res, 200, emptyDiagnostics())
+      return
+    }
+    try {
+      sendJson(res, 200, await options.diagnostics())
+    } catch (error) {
+      const body = emptyDiagnostics()
+      body.available = true
+      body.status = 'warning'
+      body.errors = [error instanceof Error ? error.message : String(error)]
+      sendJson(res, 200, body)
+    }
+  }
+}
+
 function settingsHandler(options: ManagementPanelOptions) {
   return async (req: IncomingMessage, res: ServerResponse) => {
     if (req.method === 'GET') {
@@ -427,6 +480,11 @@ export function installManagementPanelWhenReady(
       kind: 'exact',
       path: SUMMARY_PATH,
       handler: summaryHandler(options),
+    }))
+    disposers.push(server.register({
+      kind: 'exact',
+      path: DIAGNOSTICS_PATH,
+      handler: diagnosticsHandler(options),
     }))
     disposers.push(server.register({
       kind: 'exact',

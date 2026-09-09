@@ -41,8 +41,9 @@ import type {
 } from '../core/services.js'
 import { CpaDataService } from './data.js'
 import { installManagementPanelWhenReady } from './management.js'
-import type { CpaControllerState } from './management.js'
+import type { CpaControllerState, CpaDiagnosticCheck, CpaDiagnostics } from './management.js'
 import { CpaQuotaService } from './quota.js'
+import type { CpaAccountPublic } from './quota.js'
 import { planCpaRoute } from '../core/router.js'
 import type { CpaRoutePlan } from '../core/router.js'
 
@@ -104,6 +105,33 @@ function errorMessage(cause: unknown): string {
 function isConnectionError(cause: unknown): boolean {
   const message = String(isError(cause) ? cause.message : cause)
   return /fetch failed|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|timed out|aborted/i.test(message)
+}
+
+function normalized(value: string): string {
+  return value.trim().toLowerCase()
+}
+
+function modelAccounts(
+  models: readonly CpaModel[],
+  accounts: readonly CpaAccountPublic[],
+): CpaDiagnostics['modelAccounts'] {
+  const result: CpaDiagnostics['modelAccounts'] = {}
+  for (const model of models) {
+    result[model.id] = accounts
+      .filter(account => account.modelAliases === undefined
+        || account.modelAliases.some(alias => normalized(alias) === normalized(model.id)))
+      .map(account => account.authIndex)
+  }
+  return result
+}
+
+function diagnosticsStatus(
+  active: boolean,
+  checks: readonly CpaDiagnosticCheck[],
+): CpaDiagnostics['status'] {
+  if (!active) return 'unavailable'
+  if (checks.some(check => check.status === 'fail')) return 'warning'
+  return checks.every(check => check.status === 'pass') ? 'healthy' : 'warning'
 }
 
 export function resolveInitialCpaSettings(
@@ -268,6 +296,72 @@ export class CpaController {
     })
   }
 
+  async diagnostics(): Promise<CpaDiagnostics> {
+    let status = this.quotaService.snapshot()
+    let quotaError = ''
+    if (this.managementKey) {
+      try {
+        status = await this.quotaService.status()
+      } catch {
+        quotaError = 'management data unavailable'
+      }
+    }
+    const checks: CpaDiagnosticCheck[] = [
+      {
+        id: 'runtime',
+        status: this.active ? 'pass' : 'fail',
+        detail: this.active ? 'CPA runtime is active' : 'CPA runtime is not active',
+      },
+      {
+        id: 'models',
+        status: this.models.length > 0 ? 'pass' : 'fail',
+        detail: this.models.length > 0 ? `${this.models.length} models synchronized` : 'no synchronized models',
+      },
+      {
+        id: 'management',
+        status: this.managementKey ? 'pass' : 'warn',
+        detail: this.managementKey ? 'management API is configured' : 'management key is not configured',
+      },
+      {
+        id: 'accounts',
+        status: this.managementKey
+          ? status.accounts.length > 0 ? 'pass' : 'warn'
+          : 'unknown',
+        detail: this.managementKey
+          ? `${status.accounts.length} accounts available`
+          : 'account data requires a management key',
+      },
+      {
+        id: 'quota',
+        status: quotaError
+          ? 'warn'
+          : Object.values(status.quota).length === 0
+            ? 'unknown'
+            : Object.values(status.quota).some(report => report.status === 'exhausted')
+              ? 'warn'
+              : 'pass',
+        detail: quotaError
+          || Object.values(status.quota).length === 0
+          ? quotaError || 'no quota snapshot available'
+          : `${Object.values(status.quota).length} quota reports available`,
+      },
+    ]
+    const errors: string[] = []
+    if (this.lastError) errors.push(this.lastError.slice(0, 200))
+    if (quotaError) errors.push(quotaError)
+    return {
+      available: this.active,
+      status: diagnosticsStatus(this.active, checks),
+      fetchedAt: new Date().toISOString(),
+      checks,
+      models: this.models,
+      accounts: status.accounts,
+      quota: status.quota,
+      modelAccounts: modelAccounts(this.models, status.accounts),
+      errors,
+    }
+  }
+
   getState(): CpaControllerState {
     return {
       mode: this.settings.mode,
@@ -351,6 +445,7 @@ export class CpaController {
       executionStore: () => this.executionStore,
       quotaService: this.quotaService,
       dataService: this.dataService,
+      diagnostics: () => this.diagnostics(),
     })
     this.installProjection()
     this.startTimer()

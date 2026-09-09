@@ -89,3 +89,5 @@ token 汇总，因此 token 项保持为 0。服务端做短时缓存；单个�
 设置页提供紧凑的“CPA 摘要”区域：版本/更新、运行配置、用量总计、用量明细、账号。
 composer 状态详情在有 `requestId` 时提供“日志”链接，打开 CPA 原始 management
 日志界面。管理面板仍是完整管理入口。
+
+只读 `/dsh-cpa/diagnostics` 接口返回脱敏的运行、模型同步、management API、账号和 quota 检查，以及模型到账号的可用性矩阵。设置页的“CPA 连接诊断”可以手动重新检查这些状态。
