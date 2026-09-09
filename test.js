@@ -32,6 +32,7 @@ import {
   managementCookieValue,
   PANEL_PATH,
   PREFLIGHT_PATH,
+  REPORT_PATH,
   SETTINGS_PATH,
   STATUS_PATH,
   SUMMARY_PATH,
@@ -584,6 +585,7 @@ test('management panel registers status and proxy routes', () => {
       ['exact', SUMMARY_PATH],
       ['exact', DIAGNOSTICS_PATH],
       ['exact', PREFLIGHT_PATH],
+      ['exact', REPORT_PATH],
       ['exact', SETTINGS_PATH],
       ['prefix', PANEL_PATH],
     ],
@@ -773,6 +775,66 @@ test('preflight route validates input and forwards only routing facts', async ()
   await route.handler(invalid, invalidResponse)
   assert.equal(invalidResponse.status, 400)
   assert.deepEqual(JSON.parse(invalidResponse.body), { error: 'model required' })
+})
+
+test('report route returns the sanitized diagnostics artifact', async () => {
+  const routes = []
+  const server = {
+    register(route) {
+      routes.push(route)
+      return () => {}
+    },
+  }
+  const ctx = {
+    get(key) {
+      return key === 'webServer' ? server : undefined
+    },
+    logger: { warn() {} },
+  }
+  const report = {
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    diagnostics: {
+      available: true,
+      status: 'healthy',
+      fetchedAt: '2026-01-01T00:00:00.000Z',
+      checks: [],
+      models: [],
+      accounts: [],
+      quota: {},
+      modelAccounts: {},
+      localUsage: { totals: {}, models: [] },
+      budget: { dailyRequestLimit: 0, requests: 0, exceeded: false },
+      errors: [],
+    },
+    executions: [{
+      sessionId: 's1',
+      provider: 'cpa',
+      model: 'gpt-5',
+      outcome: 'success',
+      traceId: 'trace-1',
+    }],
+  }
+  installManagementPanelWhenReady(ctx, {
+    baseURL: () => 'http://127.0.0.1:8317/v1',
+    managementKey: () => 'mgmt-test',
+    report: async () => report,
+  })
+  const route = routes.find(route => route.path === REPORT_PATH)
+  const req = Readable.from([])
+  req.method = 'GET'
+  req.headers = {}
+  const res = {
+    writeHead(status, headers) {
+      this.status = status
+      this.headers = headers
+    },
+    end(body) {
+      this.body = body
+    },
+  }
+  await route.handler(req, res)
+  assert.equal(res.status, 200)
+  assert.deepEqual(JSON.parse(res.body), report)
 })
 
 test('management proxy blocks browser access to api-call', async () => {
@@ -1662,6 +1724,7 @@ test('execution store persists sanitized records without credentials', async () 
       time: 125,
     })
     assert.deepEqual(reloaded.recent('s1').map(record => record.traceId), ['trace-3', 'trace-2', 'trace-1'])
+    assert.deepEqual(reloaded.recentAll().map(record => record.traceId), ['trace-3', 'trace-2', 'trace-1'])
     const localUsage = reloaded.localUsage(123)
     assert.equal(localUsage.since, new Date(123).toISOString())
     assert.equal(localUsage.retainedRecords, 3)

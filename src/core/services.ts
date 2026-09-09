@@ -390,6 +390,13 @@ export class CpaExecutionStore {
       .slice(0, limit)
   }
 
+  recentAll(limit = this.maxEntries): ExecutionRecord[] {
+    if (limit <= 0) return []
+    return [...this.byId.values()]
+      .sort((left, right) => right.time - left.time)
+      .slice(0, limit)
+  }
+
   localUsage(since = Date.now() - 24 * 60 * 60 * 1000): LocalUsageSummary {
     return summarizeLocalUsage([...this.byId.values()], since)
   }

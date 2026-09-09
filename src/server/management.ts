@@ -16,6 +16,7 @@ export const STATUS_PATH = '/dsh-cpa/status'
 export const SUMMARY_PATH = '/dsh-cpa/summary'
 export const DIAGNOSTICS_PATH = '/dsh-cpa/diagnostics'
 export const PREFLIGHT_PATH = '/dsh-cpa/preflight'
+export const REPORT_PATH = '/dsh-cpa/report'
 export const SETTINGS_PATH = '/dsh-cpa/settings'
 export const PANEL_PATH = '/dsh-cpa/management'
 export const EXECUTION_STATUS_PATH = '/dsh-cpa/execution-status'
@@ -89,6 +90,12 @@ export interface CpaDiagnostics {
   errors: string[]
 }
 
+export interface CpaReport {
+  generatedAt: string
+  diagnostics: CpaDiagnostics
+  executions: ExecutionRecord[]
+}
+
 export interface ManagementExecutionStore {
   latest(sessionId: string | undefined): ExecutionRecord | undefined
   recent?(sessionId: string | undefined, limit?: number): ExecutionRecord[]
@@ -104,6 +111,7 @@ export interface ManagementPanelOptions {
   dataService?: { summary(): Promise<CpaSummary> }
   diagnostics?: () => Promise<CpaDiagnostics>
   preflight?: (input: CpaRouteOptions) => Promise<CpaRoutePlan>
+  report?: () => Promise<CpaReport>
 }
 
 export interface ManagementContext {
@@ -473,6 +481,24 @@ function preflightHandler(options: ManagementPanelOptions) {
   }
 }
 
+function reportHandler(options: ManagementPanelOptions) {
+  return async (req: IncomingMessage, res: ServerResponse) => {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { error: 'method not allowed' })
+      return
+    }
+    if (!options.report) {
+      sendJson(res, 503, { error: 'unavailable' })
+      return
+    }
+    try {
+      sendJson(res, 200, await options.report())
+    } catch {
+      sendJson(res, 503, { error: 'report unavailable' })
+    }
+  }
+}
+
 function settingsHandler(options: ManagementPanelOptions) {
   return async (req: IncomingMessage, res: ServerResponse) => {
     if (req.method === 'GET') {
@@ -566,6 +592,11 @@ export function installManagementPanelWhenReady(
       kind: 'exact',
       path: PREFLIGHT_PATH,
       handler: preflightHandler(options),
+    }))
+    disposers.push(server.register({
+      kind: 'exact',
+      path: REPORT_PATH,
+      handler: reportHandler(options),
     }))
     disposers.push(server.register({
       kind: 'exact',

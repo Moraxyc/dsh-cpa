@@ -144,3 +144,7 @@ Diagnostics" with a manual refresh action.
 reasoningEffort }` and returns the candidate route and request preflight result.
 It only computes routing and never sends a model request; message content is not
 accepted or forwarded so prompts do not enter the diagnostics path.
+
+`GET /dsh-cpa/report` returns a downloadable sanitized JSON report containing
+diagnostics, local usage, and recent execution traces. It excludes API keys,
+management keys, account IDs, project IDs, and credentials.

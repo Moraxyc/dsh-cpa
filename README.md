@@ -99,3 +99,5 @@ composer 状态详情在有 `requestId` 时提供“日志”链接，打开 CPA
 只读 `/dsh-cpa/diagnostics` 接口返回脱敏的运行、模型同步、management API、账号和 quota 检查，以及模型到账号的可用性矩阵；同时提供最近 24 小时 dsh-cpa 本地执行记录的请求、失败和 token 汇总。这个本地汇总与 CPA 官方 usage 分开标注。设置页的“CPA 连接诊断”可以手动重新检查这些状态。
 
 `POST /dsh-cpa/preflight` 可接收 `{ model, inputTokens, maxTokens, reasoningEffort }`，返回候选路由和请求预检结果。它只计算路由，不发送模型请求；为避免 prompt 出现在诊断链路中，接口不接受或转发消息内容。
+
+`GET /dsh-cpa/report` 返回可下载的脱敏 JSON 报告，包含 diagnostics、本地用量和最近的执行链路。报告不包含 API key、management key、账号 ID、project ID 或凭据。

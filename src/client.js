@@ -18,6 +18,7 @@ window.__ModuleLoader__.load({
     const SETTINGS_URL = '/dsh-cpa/settings'
     const SUMMARY_URL = '/dsh-cpa/summary'
     const DIAGNOSTICS_URL = '/dsh-cpa/diagnostics'
+    const REPORT_URL = '/dsh-cpa/report'
     const PANEL_URL = '/dsh-cpa/management'
     const EXECUTION_STATUS_URL = '/dsh-cpa/execution-status'
     const STYLE_ID = 'dsh-cpa-client'
@@ -600,6 +601,21 @@ window.__ModuleLoader__.load({
       })
       if (!response.ok) throw new Error('CPA 诊断不可用')
       return response.json().catch(() => { throw new Error('CPA 诊断不可用') })
+    }
+
+    async function downloadCpaReport() {
+      const response = await fetch(REPORT_URL, {
+        headers: { accept: 'application/json' },
+        cache: 'no-store',
+      })
+      if (!response.ok) throw new Error('CPA 报告不可用')
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `dsh-cpa-report-${new Date().toISOString().slice(0, 10)}.json`
+      anchor.click()
+      URL.revokeObjectURL(url)
     }
 
     function summaryNumber(value) {
@@ -1308,6 +1324,7 @@ window.__ModuleLoader__.load({
       const [diagnostics, setDiagnostics] = useState(null)
       const [error, setError] = useState('')
       const [refreshing, setRefreshing] = useState(false)
+      const [exporting, setExporting] = useState(false)
 
       useEffect(() => {
         let cancelled = false
@@ -1338,6 +1355,18 @@ window.__ModuleLoader__.load({
         }
       }
 
+      async function exportReport() {
+        setExporting(true)
+        setError('')
+        try {
+          await downloadCpaReport()
+        } catch {
+          setError('CPA 报告不可用')
+        } finally {
+          setExporting(false)
+        }
+      }
+
       const checks = Array.isArray(diagnostics?.checks) ? diagnostics.checks : []
       const models = Array.isArray(diagnostics?.models) ? diagnostics.models.slice(0, 12) : []
       const modelAccounts = diagnostics?.modelAccounts && typeof diagnostics.modelAccounts === 'object'
@@ -1357,12 +1386,20 @@ window.__ModuleLoader__.load({
       const statusWarning = diagnostics?.status !== 'healthy'
       const header = React.createElement('div', { className: 'dsh-cpa-summary-header' },
         React.createElement('span', { className: 'dsh-cpa-summary-title' }, 'CPA 连接诊断'),
-        React.createElement(Button, {
-          variant: 'outline',
-          size: 'sm',
-          onClick: () => { void refresh() },
-          disabled: refreshing,
-        }, refreshing ? '刷新中' : '重新检查'),
+        React.createElement('div', { style: { display: 'flex', gap: '6px' } },
+          React.createElement(Button, {
+            variant: 'outline',
+            size: 'sm',
+            onClick: () => { void refresh() },
+            disabled: refreshing || exporting,
+          }, refreshing ? '刷新中' : '重新检查'),
+          React.createElement(Button, {
+            variant: 'outline',
+            size: 'sm',
+            onClick: () => { void exportReport() },
+            disabled: refreshing || exporting,
+          }, exporting ? '导出中' : '导出报告'),
+        ),
       )
       const checkList = checks.length > 0
         ? React.createElement('div', { className: 'dsh-cpa-summary-list' },

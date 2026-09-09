@@ -44,7 +44,7 @@ import type {
 } from '../core/services.js'
 import { CpaDataService } from './data.js'
 import { installManagementPanelWhenReady } from './management.js'
-import type { CpaControllerState, CpaDiagnosticCheck, CpaDiagnostics } from './management.js'
+import type { CpaControllerState, CpaDiagnosticCheck, CpaDiagnostics, CpaReport } from './management.js'
 import { CpaQuotaService } from './quota.js'
 import type { CpaAccountPublic } from './quota.js'
 import { planCpaRoute } from '../core/router.js'
@@ -332,6 +332,14 @@ export class CpaController {
     return this.resolveRoute(options)
   }
 
+  async report(): Promise<CpaReport> {
+    return {
+      generatedAt: new Date().toISOString(),
+      diagnostics: await this.diagnostics(),
+      executions: this.executionStore.recentAll(),
+    }
+  }
+
   async diagnostics(): Promise<CpaDiagnostics> {
     let status = this.quotaService.snapshot()
     let quotaError = ''
@@ -503,6 +511,7 @@ export class CpaController {
       dataService: this.dataService,
       diagnostics: () => this.diagnostics(),
       preflight: options => this.preflight(options),
+      report: () => this.report(),
     })
     this.installProjection()
     this.startTimer()
