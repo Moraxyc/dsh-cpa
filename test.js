@@ -31,6 +31,7 @@ import {
   installManagementPanelWhenReady,
   managementCookieValue,
   PANEL_PATH,
+  PREFLIGHT_PATH,
   SETTINGS_PATH,
   STATUS_PATH,
   SUMMARY_PATH,
@@ -581,6 +582,7 @@ test('management panel registers status and proxy routes', () => {
       ['exact', EXECUTION_STATUS_PATH],
       ['exact', SUMMARY_PATH],
       ['exact', DIAGNOSTICS_PATH],
+      ['exact', PREFLIGHT_PATH],
       ['exact', SETTINGS_PATH],
       ['prefix', PANEL_PATH],
     ],
@@ -687,6 +689,89 @@ test('diagnostics route returns sanitized CPA health data', async () => {
   await route.handler(req, res)
   assert.equal(res.status, 200)
   assert.deepEqual(JSON.parse(res.body), diagnostics)
+})
+
+test('preflight route validates input and forwards only routing facts', async () => {
+  const routes = []
+  const server = {
+    register(route) {
+      routes.push(route)
+      return () => {}
+    },
+  }
+  const ctx = {
+    get(key) {
+      return key === 'webServer' ? server : undefined
+    },
+    logger: { warn() {} },
+  }
+  const calls = []
+  const plan = {
+    requestedModel: 'gpt-5',
+    models: ['gpt-5', 'fallback'],
+    candidates: [],
+    preflight: {
+      model: 'gpt-5',
+      inputTokens: 12_000,
+      maxTokens: 2_000,
+      contextWindow: 128_000,
+      status: 'ready',
+      issues: [],
+    },
+  }
+  installManagementPanelWhenReady(ctx, {
+    baseURL: () => 'http://127.0.0.1:8317/v1',
+    managementKey: () => 'mgmt-test',
+    preflight: async input => {
+      calls.push(input)
+      return plan
+    },
+  })
+  const route = routes.find(route => route.path === PREFLIGHT_PATH)
+  const req = Readable.from([Buffer.from(JSON.stringify({
+    model: ' gpt-5 ',
+    inputTokens: 12_000,
+    maxTokens: 2_000,
+    reasoningEffort: 'high',
+    messages: [{ role: 'user', content: 'must not be forwarded' }],
+  }))])
+  req.method = 'POST'
+  req.headers = {}
+  const res = {
+    writeHead(status, headers) {
+      this.status = status
+      this.headers = headers
+    },
+    end(body) {
+      this.body = body
+    },
+  }
+  await route.handler(req, res)
+  assert.equal(res.status, 200)
+  assert.deepEqual(JSON.parse(res.body), plan)
+  assert.deepEqual(calls, [{
+    model: 'gpt-5',
+    messages: [],
+    inputTokens: 12_000,
+    maxTokens: 2_000,
+    reasoningEffort: 'high',
+  }])
+
+  const invalid = Readable.from([Buffer.from('{}')])
+  invalid.method = 'POST'
+  invalid.headers = {}
+  const invalidResponse = {
+    writeHead(status, headers) {
+      this.status = status
+      this.headers = headers
+    },
+    end(body) {
+      this.body = body
+    },
+  }
+  await route.handler(invalid, invalidResponse)
+  assert.equal(invalidResponse.status, 400)
+  assert.deepEqual(JSON.parse(invalidResponse.body), { error: 'model required' })
 })
 
 test('management proxy blocks browser access to api-call', async () => {

@@ -127,3 +127,8 @@ The read-only `/dsh-cpa/diagnostics` endpoint returns sanitized runtime, model
 sync, management API, account, and quota checks plus a model-to-account
 availability matrix. The settings page exposes these checks in "CPA Connection
 Diagnostics" with a manual refresh action.
+
+`POST /dsh-cpa/preflight` accepts `{ model, inputTokens, maxTokens,
+reasoningEffort }` and returns the candidate route and request preflight result.
+It only computes routing and never sends a model request; message content is not
+accepted or forwarded so prompts do not enter the diagnostics path.

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
 import type { CpaMode } from '../core/config.js'
-import { isFunction, isJsonRecord, isString } from '../core/json.js'
+import { isFunction, isJsonRecord, isNumber, isString } from '../core/json.js'
 import type { JsonRecord, JsonValue } from '../core/json.js'
 import type { ExecutionRecord } from '../core/services.js'
 import { emptyCpaSummary } from './data.js'
@@ -10,10 +10,12 @@ import type { CpaSummary } from './data.js'
 import { optionValue } from './quota.js'
 import type { CpaQuotaStatus, OptionSource } from './quota.js'
 import type { CpaModel, CpaRoutingStrategy } from '../core/config.js'
+import type { CpaRouteOptions, CpaRoutePlan } from '../core/router.js'
 
 export const STATUS_PATH = '/dsh-cpa/status'
 export const SUMMARY_PATH = '/dsh-cpa/summary'
 export const DIAGNOSTICS_PATH = '/dsh-cpa/diagnostics'
+export const PREFLIGHT_PATH = '/dsh-cpa/preflight'
 export const SETTINGS_PATH = '/dsh-cpa/settings'
 export const PANEL_PATH = '/dsh-cpa/management'
 export const EXECUTION_STATUS_PATH = '/dsh-cpa/execution-status'
@@ -94,6 +96,7 @@ export interface ManagementPanelOptions {
   quotaService?: { status(): Promise<CpaQuotaStatus> }
   dataService?: { summary(): Promise<CpaSummary> }
   diagnostics?: () => Promise<CpaDiagnostics>
+  preflight?: (input: CpaRouteOptions) => Promise<CpaRoutePlan>
 }
 
 export interface ManagementContext {
@@ -398,6 +401,51 @@ function diagnosticsHandler(options: ManagementPanelOptions) {
   }
 }
 
+function preflightHandler(options: ManagementPanelOptions) {
+  return async (req: IncomingMessage, res: ServerResponse) => {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { error: 'method not allowed' })
+      return
+    }
+    if (!options.preflight) {
+      sendJson(res, 503, { error: 'unavailable' })
+      return
+    }
+    let body: Buffer
+    try {
+      body = await readRequestBody(req)
+    } catch {
+      sendJson(res, 400, { error: 'invalid body' })
+      return
+    }
+    let value: JsonValue
+    try {
+      value = body.length === 0 ? {} : JSON.parse(body.toString())
+    } catch {
+      sendJson(res, 400, { error: 'invalid JSON' })
+      return
+    }
+    if (!isJsonRecord(value) || !isString(value.model) || value.model.trim() === '') {
+      sendJson(res, 400, { error: 'model required' })
+      return
+    }
+    const input: CpaRouteOptions = {
+      model: value.model.trim(),
+      messages: [],
+    }
+    if (isNumber(value.inputTokens) && value.inputTokens >= 0) input.inputTokens = value.inputTokens
+    if (isNumber(value.maxTokens) && value.maxTokens > 0) input.maxTokens = value.maxTokens
+    if (isString(value.reasoningEffort) && value.reasoningEffort.trim() !== '') {
+      input.reasoningEffort = value.reasoningEffort.trim()
+    }
+    try {
+      sendJson(res, 200, await options.preflight(input))
+    } catch {
+      sendJson(res, 503, { error: 'preflight unavailable' })
+    }
+  }
+}
+
 function settingsHandler(options: ManagementPanelOptions) {
   return async (req: IncomingMessage, res: ServerResponse) => {
     if (req.method === 'GET') {
@@ -486,6 +534,11 @@ export function installManagementPanelWhenReady(
       kind: 'exact',
       path: DIAGNOSTICS_PATH,
       handler: diagnosticsHandler(options),
+    }))
+    disposers.push(server.register({
+      kind: 'exact',
+      path: PREFLIGHT_PATH,
+      handler: preflightHandler(options),
     }))
     disposers.push(server.register({
       kind: 'exact',

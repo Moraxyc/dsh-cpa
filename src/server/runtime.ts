@@ -47,7 +47,7 @@ import type { CpaControllerState, CpaDiagnosticCheck, CpaDiagnostics } from './m
 import { CpaQuotaService } from './quota.js'
 import type { CpaAccountPublic } from './quota.js'
 import { planCpaRoute } from '../core/router.js'
-import type { CpaRoutePlan } from '../core/router.js'
+import type { CpaRouteOptions, CpaRoutePlan } from '../core/router.js'
 
 export interface CpaRuntimeContext {
   get<T>(key: string): T | undefined
@@ -316,6 +316,10 @@ export class CpaController {
     })
   }
 
+  async preflight(options: CpaRouteOptions): Promise<CpaRoutePlan> {
+    return this.resolveRoute(options)
+  }
+
   async diagnostics(): Promise<CpaDiagnostics> {
     let status = this.quotaService.snapshot()
     let quotaError = ''
@@ -467,6 +471,7 @@ export class CpaController {
       quotaService: this.quotaService,
       dataService: this.dataService,
       diagnostics: () => this.diagnostics(),
+      preflight: options => this.preflight(options),
     })
     this.installProjection()
     this.startTimer()

@@ -36,6 +36,15 @@ export interface CpaRouteSnapshot {
   routingStrategy?: CpaRoutingStrategy
 }
 
+export interface CpaRouteOptions {
+  model: string
+  messages?: GenerateOptions['messages']
+  system?: string
+  maxTokens?: number
+  reasoningEffort?: string
+  inputTokens?: number
+}
+
 export type CpaRouteHealth = 'healthy' | 'degraded' | 'unavailable' | 'unknown'
 
 export interface CpaRouteIssue {
@@ -91,9 +100,13 @@ function supportsReasoning(model: CpaModel, effort: string | undefined): boolean
   return model.reasoning.efforts.some(candidate => normalized(candidate.id) === normalized(effort))
 }
 
-export function estimateInputTokens(options: Pick<GenerateOptions, 'messages' | 'system'>): number {
+export function estimateInputTokens(options: CpaRouteOptions): number {
+  if (options.inputTokens !== undefined && Number.isFinite(options.inputTokens) && options.inputTokens >= 0) {
+    return Math.ceil(options.inputTokens)
+  }
   const systemLength = options.system?.length ?? 0
-  const messageLength = options.messages.reduce((total, message) => total + JSON.stringify(message.content).length, 0)
+  const messageLength = (options.messages ?? [])
+    .reduce((total, message) => total + JSON.stringify(message.content).length, 0)
   return Math.ceil((systemLength + messageLength) / 4)
 }
 
@@ -249,7 +262,7 @@ function issueStatus(issues: readonly CpaRouteIssue[]): CpaPreflightResult['stat
 }
 
 function preflightCpaRequest(
-  options: Pick<GenerateOptions, 'model' | 'messages' | 'system' | 'maxTokens' | 'reasoningEffort'>,
+  options: CpaRouteOptions,
   snapshot: CpaRouteSnapshot,
   quota: ModelQuotaScore,
 ): CpaPreflightResult {
@@ -287,7 +300,7 @@ function preflightCpaRequest(
 
 function candidateReasons(
   model: CpaModel,
-  options: Pick<GenerateOptions, 'reasoningEffort' | 'messages' | 'system' | 'maxTokens'>,
+  options: CpaRouteOptions,
   snapshot: CpaRouteSnapshot,
   quota: ModelQuotaScore,
 ): CandidateReasonResult {
@@ -312,7 +325,7 @@ function candidateReasons(
 
 function routeCandidate(
   model: CpaModel,
-  options: Pick<GenerateOptions, 'reasoningEffort' | 'messages' | 'system' | 'maxTokens'>,
+  options: CpaRouteOptions,
   snapshot: CpaRouteSnapshot,
 ): CpaRouteCandidate {
   const quota = quotaForModel(model.id, snapshot)
@@ -328,7 +341,7 @@ function routeCandidate(
 }
 
 export function planCpaRoute(
-  options: Pick<GenerateOptions, 'model' | 'messages' | 'system' | 'maxTokens' | 'reasoningEffort'>,
+  options: CpaRouteOptions,
   snapshot: CpaRouteSnapshot,
   maxAttempts = DEFAULT_MAX_ATTEMPTS,
 ): CpaRoutePlan {
@@ -359,7 +372,7 @@ export function planCpaRoute(
 }
 
 export function selectCpaModels(
-  options: Pick<GenerateOptions, 'model' | 'messages' | 'system' | 'maxTokens' | 'reasoningEffort'>,
+  options: CpaRouteOptions,
   snapshot: CpaRouteSnapshot,
   maxAttempts = DEFAULT_MAX_ATTEMPTS,
 ): string[] {
