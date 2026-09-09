@@ -1334,6 +1334,10 @@ window.__ModuleLoader__.load({
       }
 
       const checks = Array.isArray(diagnostics?.checks) ? diagnostics.checks : []
+      const models = Array.isArray(diagnostics?.models) ? diagnostics.models.slice(0, 12) : []
+      const modelAccounts = diagnostics?.modelAccounts && typeof diagnostics.modelAccounts === 'object'
+        ? diagnostics.modelAccounts
+        : {}
       const statusLabel = diagnostics?.status === 'healthy'
         ? '正常'
         : diagnostics?.status === 'warning'
@@ -1360,6 +1364,34 @@ window.__ModuleLoader__.load({
           )),
         )
         : React.createElement('div', { className: 'dsh-cpa-summary-status' }, error || '诊断加载中')
+      const modelList = models.length > 0
+        ? React.createElement('div', { className: 'dsh-cpa-summary-block' },
+          React.createElement('div', { className: 'dsh-cpa-summary-block-title' }, '模型能力'),
+          React.createElement('div', { className: 'dsh-cpa-summary-list' },
+            models.map((model, index) => {
+              const accountCount = Array.isArray(modelAccounts[model?.id])
+                ? modelAccounts[model.id].length
+                : 0
+              const context = Number(model?.contextLength)
+              const contextText = Number.isFinite(context) && context > 0
+                ? `上下文 ${Math.round(context / 1000)}k`
+                : '上下文未知'
+              const reasoning = Array.isArray(model?.reasoning?.efforts)
+                ? `推理 ${model.reasoning.efforts.length} 档`
+                : '普通模型'
+              return React.createElement('div', {
+                className: 'dsh-cpa-summary-list-row',
+                key: model?.id || index,
+              },
+                React.createElement('span', { className: 'dsh-cpa-summary-list-main' }, model?.id || '未知模型'),
+                React.createElement('span', null, contextText),
+                React.createElement('span', null, reasoning),
+                React.createElement('span', null, `可用账号 ${accountCount}`),
+              )
+            }),
+          ),
+        )
+        : null
 
       return React.createElement('div', { className: 'dsh-cpa-summary' },
         header,
@@ -1367,6 +1399,7 @@ window.__ModuleLoader__.load({
           className: `dsh-cpa-summary-status${statusWarning ? ' dsh-cpa-summary-status-warning' : ''}`,
         }, error || statusLabel),
         checkList,
+        modelList,
       )
     }
 
