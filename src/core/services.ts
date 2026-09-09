@@ -2,6 +2,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { ConfigScalar } from './config.js'
 import { isJsonRecord, isNonEmptyString, isNumber, isString } from './json.js'
+import type { JsonValue } from './json.js'
 
 export interface ExecutionInput {
   authIndex?: ConfigScalar
@@ -15,6 +16,14 @@ export interface ExecutionInput {
   time?: ConfigScalar
   inputTokens?: ConfigScalar
   outputTokens?: ConfigScalar
+  requestedModel?: ConfigScalar
+  attempt?: ConfigScalar
+  route?: JsonValue
+  preflightStatus?: ConfigScalar
+  preflightIssues?: JsonValue
+  fallbackFrom?: ConfigScalar
+  fallbackReason?: ConfigScalar
+  errorCode?: ConfigScalar
 }
 
 export interface ExecutionRecord {
@@ -29,6 +38,14 @@ export interface ExecutionRecord {
   time: number
   inputTokens?: number
   outputTokens?: number
+  requestedModel?: string
+  attempt?: number
+  route?: string[]
+  preflightStatus?: 'ready' | 'warning' | 'blocked'
+  preflightIssues?: string[]
+  fallbackFrom?: string
+  fallbackReason?: string
+  errorCode?: string
 }
 
 export interface AccountStats {
@@ -79,6 +96,29 @@ function nonNegativeNumber(value: ConfigScalar): number | undefined {
 function tokenCount(value: ConfigScalar): number {
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
+}
+
+function boundedString(value: ConfigScalar, maxLength: number): string | undefined {
+  return isNonEmptyString(value) ? value.trim().slice(0, maxLength) : undefined
+}
+
+function boundedStringList(value: JsonValue | undefined, maxItems: number, maxLength: number): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const values = value
+    .filter(isString)
+    .map(item => item.trim().slice(0, maxLength))
+    .filter(item => item !== '')
+    .slice(0, maxItems)
+  return values
+}
+
+function positiveInteger(value: ConfigScalar): number | undefined {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined
+}
+
+function preflightStatus(value: ConfigScalar): ExecutionRecord['preflightStatus'] {
+  return value === 'ready' || value === 'warning' || value === 'blocked' ? value : undefined
 }
 
 export function emptyCpaSessionStats(): CpaSessionStats {
@@ -139,6 +179,14 @@ export function sanitizeExecutionRecord(value: ExecutionInput | null | undefined
     : ''
   const inputTokens = nonNegativeNumber(value.inputTokens)
   const outputTokens = nonNegativeNumber(value.outputTokens)
+  const requestedModel = boundedString(value.requestedModel, 200)
+  const attempt = positiveInteger(value.attempt)
+  const route = boundedStringList(value.route, 16, 200)
+  const status = preflightStatus(value.preflightStatus)
+  const preflightIssues = boundedStringList(value.preflightIssues, 16, 80)
+  const fallbackFrom = boundedString(value.fallbackFrom, 200)
+  const fallbackReason = boundedString(value.fallbackReason, 80)
+  const errorCode = boundedString(value.errorCode, 80)
   if (authIndex === '' && sessionId === '') return undefined
   const record: ExecutionRecord = {
     provider: isString(value.provider) ? value.provider : '',
@@ -153,6 +201,14 @@ export function sanitizeExecutionRecord(value: ExecutionInput | null | undefined
   if (sessionId !== '') record.sessionId = sessionId
   if (inputTokens !== undefined) record.inputTokens = inputTokens
   if (outputTokens !== undefined) record.outputTokens = outputTokens
+  if (requestedModel !== undefined) record.requestedModel = requestedModel
+  if (attempt !== undefined) record.attempt = attempt
+  if (route !== undefined) record.route = route
+  if (status !== undefined) record.preflightStatus = status
+  if (preflightIssues !== undefined) record.preflightIssues = preflightIssues
+  if (fallbackFrom !== undefined) record.fallbackFrom = fallbackFrom
+  if (fallbackReason !== undefined) record.fallbackReason = fallbackReason
+  if (errorCode !== undefined) record.errorCode = errorCode
   return record
 }
 
@@ -228,6 +284,14 @@ export class CpaExecutionStore {
   latest(sessionId: string | undefined): ExecutionRecord | undefined {
     if (sessionId === undefined) return undefined
     return this.bySession.get(sessionId)
+  }
+
+  recent(sessionId: string | undefined, limit = 8): ExecutionRecord[] {
+    if (sessionId === undefined || limit <= 0) return []
+    return [...this.byId.values()]
+      .filter(record => record.sessionId === sessionId)
+      .sort((left, right) => right.time - left.time)
+      .slice(0, limit)
   }
 
   async append(value: ExecutionInput | null | undefined): Promise<ExecutionRecord | undefined> {

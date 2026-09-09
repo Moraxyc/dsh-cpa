@@ -23,7 +23,7 @@ import {
   CpaAdapter,
   parseCpaTraceId,
 } from './src/core/adapter.js'
-import { selectCpaModels } from './src/core/router.js'
+import { planCpaRoute, selectCpaModels } from './src/core/router.js'
 import {
   cpaRoot,
   EXECUTION_STATUS_PATH,
@@ -349,8 +349,50 @@ test('selectCpaModels keeps the requested model first and prefers healthy quota 
   assert.deepEqual(selected, ['requested', 'healthy', 'low-quota'])
 })
 
+test('planCpaRoute explains quota risk and preflight issues', () => {
+  const plan = planCpaRoute({
+    model: 'requested',
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }],
+    reasoningEffort: undefined,
+    maxTokens: 1024,
+  }, {
+    models: [
+      { id: 'requested', contextLength: 16_384 },
+      { id: 'fallback', contextLength: 16_384 },
+    ],
+    accounts: [
+      { authIndex: 'exhausted', modelAliases: ['requested'] },
+      { authIndex: 'healthy', modelAliases: ['fallback'], success: 4 },
+    ],
+    quota: {
+      exhausted: {
+        status: 'exhausted',
+        windows: [{ id: 'requested', label: 'requested', remainingPercent: 0, exhausted: true }],
+      },
+      healthy: {
+        status: 'high',
+        windows: [{ id: 'fallback', label: 'fallback', remainingPercent: 80, exhausted: false }],
+      },
+    },
+    defaultContextWindow: 16_384,
+    defaultMaxTokens: 1024,
+  })
+  assert.deepEqual(plan.models, ['requested', 'fallback'])
+  assert.equal(plan.preflight.status, 'warning')
+  assert.deepEqual(plan.preflight.issues.map(issue => issue.code), ['QUOTA_EXHAUSTED'])
+  assert.deepEqual(plan.candidates.find(candidate => candidate.model === 'fallback'), {
+    model: 'fallback',
+    eligible: true,
+    remainingPercent: 80,
+    priority: 0,
+    health: 'healthy',
+    reasons: ['quota-available'],
+  })
+})
+
 test('CpaAdapter falls back before emitting a partial stream', async () => {
   let calls = 0
+  const executions = []
   const server = createServer((_req, res) => {
     calls += 1
     if (calls === 1) {
@@ -370,16 +412,29 @@ test('CpaAdapter falls back before emitting a partial stream', async () => {
       getModels: () => [],
       resolveApiKey: () => Promise.resolve('sk-test'),
       resolveRoute: async () => ['requested', 'fallback'],
+      onExecution: value => executions.push(value),
     })
     const events = []
     for await (const event of adapter.stream({
       messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
       model: 'requested',
+      sessionId: 'session-1',
     })) {
       events.push(event)
     }
     assert.equal(calls, 2)
     assert.equal(events.some(event => event.type === 'text-delta' && event.text === 'ok'), true)
+    assert.equal(executions.length, 2)
+    assert.equal(executions[0].model, 'requested')
+    assert.equal(executions[0].outcome, 'failure')
+    assert.equal(executions[0].errorCode, 'QUOTA')
+    assert.equal(executions[0].attempt, 1)
+    assert.deepEqual(executions[0].route, ['requested', 'fallback'])
+    assert.equal(executions[1].model, 'fallback')
+    assert.equal(executions[1].outcome, 'success')
+    assert.equal(executions[1].attempt, 2)
+    assert.equal(executions[1].fallbackFrom, 'requested')
+    assert.equal(executions[1].fallbackReason, 'QUOTA')
   } finally {
     await new Promise(resolve => server.close(resolve))
   }
@@ -667,6 +722,7 @@ test('execution status route returns sanitized account, quota, and session execu
     accounts: [{ authIndex: 'auth-1', label: 'one' }],
     quota: { 'auth-1': { status: 'low' } },
     execution,
+    executions: [execution],
   })
 })
 
@@ -1397,6 +1453,7 @@ test('execution store persists sanitized records without credentials', async () 
       requestId: '',
       time: 125,
     })
+    assert.deepEqual(reloaded.recent('s1').map(record => record.traceId), ['trace-3', 'trace-2', 'trace-1'])
     assert.equal(sanitizeExecutionRecord({ time: 1 }), undefined)
     assert.equal(sanitizeExecutionRecord(null), undefined)
   } finally {

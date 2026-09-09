@@ -56,6 +56,11 @@ candidate, and only for quota, rate-limit, server, transport, or empty-response
 failures. Once content has started, the request is never replayed, preventing
 duplicate agent output or side effects.
 
+Routing also performs a request preflight and records model-catalog, reasoning,
+context-window, account-health, and quota risks. Each attempt stores the
+candidate route, preflight result, failure code, and fallback source; the
+composer CPA readout shows the actual attempt chain and fallback reason.
+
 Credential ownership and account switching remain inside CPA. The plugin
 consumes sanitized account and quota data without reimplementing CPA account
 management.
@@ -77,8 +82,8 @@ and execution record path apply to both modes.
 The plugin parses `x-cpa-trace-id` from successful and failed responses, writes sanitized
 execution records to `$DSH_HOME/cpa/executions.json`, and exposes a `cpaUsage`
 projection for the current session. `/dsh-cpa/execution-status?sessionId=...`
-returns sanitized accounts, a quota snapshot, and the latest execution record
-for the compact composer readout. The browser cannot call CPA's
+returns sanitized accounts, a quota snapshot, the latest execution record, and
+recent attempts for the current session. The browser cannot call CPA's
 `/v0/management/api-call`; it is only used by the server-side quota query. The
 readout shows only CPA-specific state: the currently used provider/plan, failure
 or unavailable status, and one primary quota window, without repeating the token,

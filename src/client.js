@@ -389,6 +389,49 @@ window.__ModuleLoader__.load({
       }).filter(Boolean).join(' · ')
     }
 
+    function routeIssueLabel(code) {
+      const labels = {
+        MODEL_NOT_SYNCED: '模型目录未同步',
+        REASONING_UNSUPPORTED: '不支持当前推理级别',
+        CONTEXT_WINDOW_EXCEEDED: '超出上下文窗口',
+        MAX_COMPLETION_EXCEEDED: '超过模型输出上限',
+        QUOTA_EXHAUSTED: '额度已耗尽',
+        ACCOUNT_UNAVAILABLE: '账号不可用',
+      }
+      return labels[code] || code
+    }
+
+    function fallbackReasonLabel(code) {
+      const labels = {
+        QUOTA: '额度耗尽',
+        RATE_LIMIT: '触发限流',
+        SERVER: '服务端错误',
+        TRANSPORT: '网络错误',
+        EMPTY_RESPONSE: '空响应',
+        STREAM_CLOSED: '流提前结束',
+        HTTP_408: '请求超时',
+        HTTP_502: '网关错误',
+        HTTP_503: '服务不可用',
+        HTTP_504: '网关超时',
+      }
+      return labels[code] || code || '请求失败'
+    }
+
+    function executionTimeline(executions) {
+      if (!Array.isArray(executions) || executions.length === 0) return ''
+      return [...executions]
+        .filter(item => item && typeof item === 'object')
+        .sort((left, right) => Number(left.attempt || 0) - Number(right.attempt || 0))
+        .map(item => {
+          const model = typeof item.model === 'string' && item.model !== '' ? item.model : '未知模型'
+          if (item.outcome === 'failure') {
+            return `${model} 失败${item.errorCode ? `（${fallbackReasonLabel(item.errorCode)}）` : ''}`
+          }
+          return `${model} 成功`
+        })
+        .join(' → ')
+    }
+
     function formatReadout(accounts, quota, execution) {
       const account = resolveAccount(accounts, execution)
       const parts = ['CPA']
@@ -407,6 +450,7 @@ window.__ModuleLoader__.load({
         if (status !== '') parts.push(status)
         const failed = Math.max(positiveCount(account.failed), execution?.outcome === 'failure' ? 1 : 0)
         if (failed > 0) parts.push(`失败 ${failed}`)
+        if (execution?.fallbackFrom) parts.push(`已切换至 ${execution.model}`)
         const window = preferredWindow(reportWindows(quota, account.authIndex))
         if (window) parts.push(quotaText(window))
       } else {
@@ -418,6 +462,7 @@ window.__ModuleLoader__.load({
           if (disabled > 0) parts.push(`${disabled} 停用`)
         }
         if (execution?.outcome === 'failure') parts.push('失败')
+        if (execution?.fallbackFrom) parts.push(`已切换至 ${execution.model}`)
         if (execution && typeof execution.model === 'string' && execution.model !== '') {
           parts.push(execution.model)
         }
@@ -425,7 +470,7 @@ window.__ModuleLoader__.load({
       return parts.join(' · ')
     }
 
-    function detailRows(accounts, quota, execution) {
+    function detailRows(accounts, quota, execution, executions) {
       const rows = []
       const account = resolveAccount(accounts, execution)
       if (account) {
@@ -484,6 +529,30 @@ window.__ModuleLoader__.load({
       }
       if (execution && typeof execution.model === 'string' && execution.model !== '') {
         rows.push({ label: '模型', value: execution.model })
+      }
+      if (execution && typeof execution.requestedModel === 'string' && execution.requestedModel !== ''
+        && execution.requestedModel !== execution.model) {
+        rows.push({ label: '原始模型', value: execution.requestedModel })
+      }
+      if (execution && typeof execution.fallbackFrom === 'string' && execution.fallbackFrom !== '') {
+        rows.push({
+          label: '自动切换',
+          value: `${execution.fallbackFrom} → ${execution.model || '未知'} · ${fallbackReasonLabel(execution.fallbackReason)}`,
+        })
+      }
+      const timeline = executionTimeline(executions)
+      if (timeline !== '') rows.push({ label: '执行链路', value: timeline })
+      if (Array.isArray(execution?.route) && execution.route.length > 1) {
+        rows.push({ label: '候选路由', value: execution.route.join(' → ') })
+      }
+      if (execution?.preflightStatus && execution.preflightStatus !== 'ready') {
+        const issues = Array.isArray(execution.preflightIssues)
+          ? execution.preflightIssues.map(routeIssueLabel).join('、')
+          : ''
+        rows.push({
+          label: '请求预检',
+          value: `${execution.preflightStatus === 'blocked' ? '阻断' : '有风险'}${issues ? ` · ${issues}` : ''}`,
+        })
       }
       if (execution && typeof execution.purpose === 'string' && execution.purpose !== '') {
         rows.push({ label: '用途', value: execution.purpose })
@@ -608,6 +677,7 @@ window.__ModuleLoader__.load({
 
     function accountNeedsWarning(account, quota, execution) {
       if (execution?.outcome === 'failure') return true
+      if (execution?.preflightStatus === 'blocked') return true
       if (!account || account === null || typeof account !== 'object') return false
       if (account.disabled === true || account.unavailable === true) return true
       if (accountStatus(account) !== '') return true
@@ -664,7 +734,7 @@ window.__ModuleLoader__.load({
         'dsh-cpa-readout',
         accountNeedsWarning(account, readout?.quota, execution) ? 'dsh-cpa-readout-warning' : '',
       ].filter(Boolean).join(' ')
-      const details = detailRows(accounts, readout?.quota, execution)
+      const details = detailRows(accounts, readout?.quota, execution, readout?.executions)
       return React.createElement('div', { className: 'dsh-cpa-dock' },
         React.createElement('button', {
           type: 'button',

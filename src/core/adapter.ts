@@ -31,6 +31,7 @@ import type {
 import { chatCompletionsUrl } from './config.js'
 import type { CpaModel } from './config.js'
 import { isFunction, isJsonRecord, isNonEmptyString, isString } from './json.js'
+import type { CpaRoutePlan, CpaPreflightResult } from './router.js'
 
 const DONE = '[DONE]'
 const EMPTY_RESPONSE = EMPTY_RESPONSE_CODE
@@ -54,9 +55,9 @@ export interface CpaTrace {
 }
 
 export interface CpaExecutionEvent {
-  authIndex: string
-  traceId: string
-  requestId: ProviderRequestId
+  authIndex?: string
+  traceId?: string
+  requestId?: ProviderRequestId
   sessionId?: GenerateOptions['sessionId']
   provider: string
   model: string
@@ -64,6 +65,14 @@ export interface CpaExecutionEvent {
   outcome: 'success' | 'failure'
   inputTokens?: number
   outputTokens?: number
+  requestedModel?: string
+  attempt?: number
+  route?: string[]
+  preflightStatus?: CpaPreflightResult['status']
+  preflightIssues?: string[]
+  fallbackFrom?: string
+  fallbackReason?: string
+  errorCode?: string
 }
 
 export interface CpaAdapterOptions {
@@ -73,7 +82,7 @@ export interface CpaAdapterOptions {
   defaultMaxTokens: number
   getModels: () => CpaModel[]
   resolveApiKey: () => Promise<string>
-  resolveRoute?: (options: GenerateOptions) => Promise<readonly string[]>
+  resolveRoute?: (options: GenerateOptions) => Promise<readonly string[] | CpaRoutePlan>
   onExecution?: (execution: CpaExecutionEvent) => void | Promise<void>
 }
 
@@ -569,33 +578,51 @@ export class CpaAdapter extends LlmAdapter {
 
   override async * stream(options: GenerateOptions): AsyncGenerator<StreamChunk> {
     let models: readonly string[] = [options.model]
+    let routePlan: CpaRoutePlan | undefined
     try {
       const resolved = await this.options.resolveRoute?.(options)
-      if (resolved !== undefined && resolved.length > 0) {
-        models = [...new Set([options.model, ...resolved])]
+      if (resolved !== undefined) {
+        if (Array.isArray(resolved)) {
+          if (resolved.length > 0) models = [...new Set([options.model, ...resolved])]
+        } else if (isRoutePlan(resolved) && resolved.models.length > 0) {
+          routePlan = resolved
+          models = [...new Set([options.model, ...resolved.models])]
+        }
       }
     } catch {
       // Routing is advisory; a stale or unavailable management API must not block chat.
     }
 
     let lastError: unknown
-    for (const model of models) {
+    let previousModel: string | undefined
+    let previousErrorCode: string | undefined
+    for (const [index, model] of models.entries()) {
       let emitted = false
+      const context: AttemptContext = {
+        requestedModel: options.model,
+        attempt: index + 1,
+        route: models,
+        preflight: routePlan?.preflight,
+        fallbackFrom: previousModel,
+        fallbackReason: previousErrorCode,
+      }
       try {
-        for await (const event of this.streamAttempt({ ...options, model })) {
+        for await (const event of this.streamAttempt({ ...options, model }, context)) {
           emitted = true
           yield event
         }
         return
       } catch (error) {
         lastError = error
+        previousModel = model
+        previousErrorCode = errorCode(error)
         if (emitted || !isFallbackError(error) || model === models[models.length - 1]) throw error
       }
     }
     if (lastError !== undefined) throw lastError
   }
 
-  private async * streamAttempt(options: GenerateOptions): AsyncGenerator<StreamChunk> {
+  private async * streamAttempt(options: GenerateOptions, context: AttemptContext): AsyncGenerator<StreamChunk> {
     const apiKey = await this.options.resolveApiKey()
     const url = chatCompletionsUrl(this.options.baseURL)
     const body = serializeRequest(options)
@@ -617,61 +644,125 @@ export class CpaAdapter extends LlmAdapter {
       })
     } catch (error) {
       if (options.signal?.aborted) {
-        throw new LlmError('aborted', 'ABORTED', { cause: error })
+        const failure = new LlmError('aborted', 'ABORTED', { cause: error })
+        await this.reportExecution(this.executionEvent(options, context, undefined, 'failure', failure.code))
+        throw failure
       }
-      throw new LlmError('request failed', 'TRANSPORT', { cause: error })
+      const failure = new LlmError('request failed', 'TRANSPORT', { cause: error })
+      await this.reportExecution(this.executionEvent(options, context, undefined, 'failure', failure.code))
+      throw failure
     }
 
     if (!response.ok) {
       const trace = cpaTrace(response.headers)
-      if (trace !== undefined && this.options.onExecution !== undefined) {
-        await this.options.onExecution({
-          authIndex: trace.authIndex,
-          traceId: trace.traceId,
-          requestId: trace.requestId,
-          sessionId: options.sessionId,
-          provider: this.options.provider,
-          model: options.model,
-          purpose: options.purpose,
-          outcome: 'failure',
-        })
+      let failure: unknown
+      try {
+        await readError(response)
+      } catch (error) {
+        failure = error
       }
-      await readError(response)
-      return
+      await this.reportExecution(this.executionEvent(
+        options,
+        context,
+        trace,
+        'failure',
+        errorCode(failure),
+      ))
+      throw failure
     }
+    const trace = cpaTrace(response.headers)
     if (!response.body) {
-      throw new LlmError('empty response', 'EMPTY_RESPONSE')
+      const failure = new LlmError('empty response', 'EMPTY_RESPONSE')
+      await this.reportExecution(this.executionEvent(options, context, trace, 'failure', failure.code))
+      throw failure
     }
 
-    const trace = cpaTrace(response.headers)
     let executionUsage: TokenUsage | undefined
     let completed = false
+    let failureCode: string | undefined
     try {
       for await (const event of translate(parseSse(response.body))) {
+        if (event.type === 'finish' && event.reason.kind === 'error') {
+          throw new LlmError(event.reason.failure.message, event.reason.failure.code)
+        }
         if (event.type === 'usage' && event.usage !== undefined) executionUsage = event.usage
         yield event
       }
       completed = true
+    } catch (error) {
+      failureCode = errorCode(error)
+      throw error
     } finally {
-      if (trace !== undefined && this.options.onExecution !== undefined) {
-        const execution: CpaExecutionEvent = {
-          authIndex: trace.authIndex,
-          traceId: trace.traceId,
-          requestId: trace.requestId,
-          sessionId: options.sessionId,
-          provider: this.options.provider,
-          model: options.model,
-          purpose: options.purpose,
-          outcome: completed ? 'success' : 'failure',
-        }
-        if (executionUsage !== undefined) {
-          execution.inputTokens = executionUsage.inputTokens
-          execution.outputTokens = executionUsage.outputTokens
-        }
-        await this.options.onExecution(execution)
+      const execution = this.executionEvent(
+        options,
+        context,
+        trace,
+        completed ? 'success' : 'failure',
+        failureCode,
+      )
+      if (executionUsage !== undefined) {
+        execution.inputTokens = executionUsage.inputTokens
+        execution.outputTokens = executionUsage.outputTokens
       }
+      await this.reportExecution(execution)
     }
   }
+
+  private executionEvent(
+    options: GenerateOptions,
+    context: AttemptContext,
+    trace: CpaTrace | undefined,
+    outcome: CpaExecutionEvent['outcome'],
+    failureCode: string | undefined,
+  ): CpaExecutionEvent {
+    const execution: CpaExecutionEvent = {
+      sessionId: options.sessionId,
+      provider: this.options.provider,
+      model: options.model,
+      purpose: options.purpose,
+      outcome,
+      requestedModel: context.requestedModel,
+      attempt: context.attempt,
+      route: [...context.route],
+      preflightStatus: context.preflight?.status,
+      preflightIssues: context.preflight?.issues.map(issue => issue.code),
+      fallbackFrom: context.fallbackFrom,
+      fallbackReason: context.fallbackReason,
+      errorCode: failureCode,
+    }
+    if (trace !== undefined) {
+      execution.authIndex = trace.authIndex
+      execution.traceId = trace.traceId
+      execution.requestId = trace.requestId
+    }
+    return execution
+  }
+
+  private async reportExecution(execution: CpaExecutionEvent): Promise<void> {
+    try {
+      await this.options.onExecution?.(execution)
+    } catch {
+      // Execution telemetry must not replace the provider result.
+    }
+  }
+}
+
+interface AttemptContext {
+  requestedModel: string
+  attempt: number
+  route: readonly string[]
+  preflight?: CpaPreflightResult
+  fallbackFrom?: string
+  fallbackReason?: string
+}
+
+function errorCode(cause: unknown): string | undefined {
+  if (!isJsonRecord(cause) || !isString(cause.code)) return undefined
+  return cause.code
+}
+
+function isRoutePlan(value: readonly string[] | CpaRoutePlan): value is CpaRoutePlan {
+  return !Array.isArray(value)
 }
 
 function isFallbackError(cause: unknown): boolean {

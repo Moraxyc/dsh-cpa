@@ -43,7 +43,8 @@ import { CpaDataService } from './data.js'
 import { installManagementPanelWhenReady } from './management.js'
 import type { CpaControllerState } from './management.js'
 import { CpaQuotaService } from './quota.js'
-import { selectCpaModels } from '../core/router.js'
+import { planCpaRoute } from '../core/router.js'
+import type { CpaRoutePlan } from '../core/router.js'
 
 export interface CpaRuntimeContext {
   get<T>(key: string): T | undefined
@@ -254,11 +255,11 @@ export class CpaController {
     return this.apiKey || ''
   }
 
-  async resolveRoute(options: Parameters<typeof selectCpaModels>[0]): Promise<readonly string[]> {
+  async resolveRoute(options: Parameters<typeof planCpaRoute>[0]): Promise<CpaRoutePlan> {
     const status = this.managementKey
       ? await this.quotaService.status()
       : this.quotaService.snapshot()
-    return selectCpaModels(options, {
+    return planCpaRoute(options, {
       models: this.models,
       accounts: status.accounts,
       quota: status.quota,

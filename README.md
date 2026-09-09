@@ -48,6 +48,8 @@ npx @deepseek-ai/dsh plugin --profile headless add .
 
 请求进入 agent 的 `cpa` provider 时，插件会使用 CPA 已同步的模型能力、上下文窗口、认证账号可用模型和 quota 快照生成候选顺序。用户指定的模型始终是第一候选；只有在请求尚未产生任何流内容，并且 CPA 返回额度耗尽、限流、服务端、传输或空响应类错误时，才会按候选顺序重试。流已经开始后不会重放请求，避免 agent 收到重复内容或产生重复副作用。
 
+路由同时会执行请求预检，记录模型目录、推理级别、上下文窗口、账号健康度和 quota 风险。每次尝试会保存候选路由、预检结果、失败代码和自动切换来源；composer 的 CPA 状态详情会展示实际执行链路和切换原因。
+
 账号凭据和账号切换仍由 CPA 管理，插件只消费其脱敏后的账号/quota 数据，不复制 CPA 的账号管理能力。
 
 ## 设置面板
@@ -64,8 +66,7 @@ quota 缓存与并发，以及配置、设置、执行记录路径。其中端�
 
 插件会解析成功与失败响应中的 `x-cpa-trace-id`，把脱敏后的执行记录写入
 `$DSH_HOME/cpa/executions.json`，并给当前会话提供 `cpaUsage` 投影。
-`/dsh-cpa/execution-status?sessionId=...` 返回脱敏后的账号、额度快照和
-最近一次执行记录，供 composer 下方的紧凑状态行读取。浏览器无法调用 CPA 的
+`/dsh-cpa/execution-status?sessionId=...` 返回脱敏后的账号、额度快照、最近一次执行记录和当前会话的最近尝试，供 composer 下方的紧凑状态行读取。浏览器无法调用 CPA 的
 `/v0/management/api-call`，该接口仅由服务端 quota 查询使用。状态行只展示 CPA
 集成特有的信息：当前使用服务商/套餐、失败/不可用状态和一个主额度窗口，不重复
 dsh 已展示的 token、耗时和性能统计。服务商同时从认证文件和 API key 配置读取；

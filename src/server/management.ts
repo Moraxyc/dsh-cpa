@@ -61,6 +61,7 @@ export interface CpaControllerState {
 
 export interface ManagementExecutionStore {
   latest(sessionId: string | undefined): ExecutionRecord | undefined
+  recent?(sessionId: string | undefined, limit?: number): ExecutionRecord[]
 }
 
 export interface ManagementPanelOptions {
@@ -299,19 +300,23 @@ function executionStatusHandler(options: ManagementPanelOptions) {
       // Quota is best-effort; keep the execution readout available.
     }
     let execution: ExecutionRecord | null = null
+    let executions: ExecutionRecord[] = []
     try {
       const executionStore = isFunction(options.executionStore)
         ? options.executionStore()
         : options.executionStore
       execution = executionStore?.latest(sessionId) ?? null
+      executions = executionStore?.recent?.(sessionId) ?? (execution === null ? [] : [execution])
     } catch {
       execution = null
+      executions = []
     }
     sendJson(res, 200, {
       available: true,
       accounts: quota.accounts,
       quota: quota.quota,
       execution,
+      executions,
     })
   }
 }
