@@ -9,7 +9,7 @@ import { emptyCpaSummary } from './data.js'
 import type { CpaSummary } from './data.js'
 import { optionValue } from './quota.js'
 import type { CpaQuotaStatus, OptionSource } from './quota.js'
-import type { CpaModel } from '../core/config.js'
+import type { CpaModel, CpaRoutingStrategy } from '../core/config.js'
 
 export const STATUS_PATH = '/dsh-cpa/status'
 export const SUMMARY_PATH = '/dsh-cpa/summary'
@@ -50,6 +50,7 @@ export interface CpaControllerState {
   }
   bin: string
   usageStatisticsEnabled: boolean
+  routingStrategy: CpaRoutingStrategy
   refreshIntervalMs: number
   port: number
   configPath: string

@@ -79,6 +79,10 @@ and execution record paths. The port, config path, and usage statistics only
 apply to internal CPA; model refresh, quota cache/concurrency, settings path,
 and execution record path apply to both modes.
 
+Advanced settings also expose balanced, quality, availability, and quota-first
+routing strategies. The strategy only changes dsh-cpa candidate ordering; CPA
+continues to own credentials and account switching.
+
 ## Usage Status
 
 The plugin parses `x-cpa-trace-id` from successful and failed responses, writes sanitized

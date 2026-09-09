@@ -58,6 +58,7 @@ import {
 } from './src/core/services.js'
 
 const DEFAULT_ADVANCED_SETTINGS = Object.freeze({
+  routingStrategy: 'balanced',
   refreshIntervalMs: 300_000,
   port: 8317,
   configPath: '',
@@ -349,6 +350,36 @@ test('selectCpaModels keeps the requested model first and prefers healthy quota 
     defaultMaxTokens: 1024,
   })
   assert.deepEqual(selected, ['requested', 'healthy', 'low-quota'])
+
+  const quotaFirst = selectCpaModels({
+    model: 'requested',
+    messages: [],
+    reasoningEffort: undefined,
+    maxTokens: 1024,
+  }, {
+    models: [
+      { id: 'low-quota', contextLength: 16_384 },
+      { id: 'healthy', contextLength: 16_384 },
+    ],
+    accounts: [
+      { authIndex: 'low', modelAliases: ['low-quota'], success: 2 },
+      { authIndex: 'high', modelAliases: ['healthy'] },
+    ],
+    quota: {
+      low: {
+        status: 'low',
+        windows: [{ id: 'low-quota', label: 'low-quota', remainingPercent: 10, exhausted: false }],
+      },
+      high: {
+        status: 'high',
+        windows: [{ id: 'healthy', label: 'healthy', remainingPercent: 90, exhausted: false }],
+      },
+    },
+    defaultContextWindow: 16_384,
+    defaultMaxTokens: 1024,
+    routingStrategy: 'quota',
+  })
+  assert.deepEqual(quotaFirst, ['requested', 'healthy', 'low-quota'])
 })
 
 test('planCpaRoute explains quota risk and preflight issues', () => {
@@ -871,6 +902,7 @@ test('cpa settings merge and initial resolution control runtime mode', () => {
     authFilesTtlMs: 1_000,
     quotaTtlMs: 2_000,
     quotaConcurrency: 2,
+    routingStrategy: 'quota',
   })
   assert.deepEqual(merged, {
     mode: 'external',
@@ -887,6 +919,7 @@ test('cpa settings merge and initial resolution control runtime mode', () => {
     authFilesTtlMs: 1_000,
     quotaTtlMs: 2_000,
     quotaConcurrency: 2,
+    routingStrategy: 'quota',
   })
   assert.equal(cpaSettingsEqual(merged, { ...merged }), true)
   const disabled = mergeCpaSettings(merged, { usageStatisticsEnabled: false })
@@ -896,6 +929,7 @@ test('cpa settings merge and initial resolution control runtime mode', () => {
   assert.equal(invalid.port, 9000)
   assert.equal(invalid.refreshIntervalMs, 120_000)
   assert.throws(() => mergeCpaSettings(merged, { mode: 'sideways' }), /invalid mode/)
+  assert.throws(() => mergeCpaSettings(merged, { routingStrategy: 'sideways' }), /invalid routing strategy/)
 })
 
 test('resolveOptions ignores legacy CPA environment variables', () => {

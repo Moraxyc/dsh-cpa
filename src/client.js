@@ -935,6 +935,7 @@ window.__ModuleLoader__.load({
       const [externalManagementKey, setExternalManagementKey] = useState('')
       const [internalBin, setInternalBin] = useState('')
       const [usageStatisticsEnabled, setUsageStatisticsEnabled] = useState(true)
+      const [routingStrategy, setRoutingStrategy] = useState('balanced')
       const [refreshIntervalMs, setRefreshIntervalMs] = useState('300000')
       const [port, setPort] = useState('8317')
       const [configPath, setConfigPath] = useState('')
@@ -963,6 +964,7 @@ window.__ModuleLoader__.load({
               setExternalUrl(body.external?.url || '')
               setInternalBin(body.bin || '')
               setUsageStatisticsEnabled(body.usageStatisticsEnabled !== false)
+              setRoutingStrategy(body.routingStrategy || 'balanced')
               setRefreshIntervalMs(String(body.refreshIntervalMs ?? 300000))
               setPort(String(body.port ?? 8317))
               setConfigPath(body.configPath || '')
@@ -1005,6 +1007,15 @@ window.__ModuleLoader__.load({
         gap: '4px',
         minWidth: '220px',
         flex: '1 1 280px',
+      }
+      const selectStyle = {
+        boxSizing: 'border-box',
+        minHeight: '32px',
+        padding: '0 8px',
+        border: '1px solid var(--dsw-alias-border-l2)',
+        borderRadius: '8px',
+        background: 'var(--dsw-alias-bg-layer-1)',
+        color: 'var(--dsw-alias-label-primary)',
       }
       function textField(label, value, onChange, placeholder = '') {
         return React.createElement('div', { style: fieldStyle },
@@ -1173,6 +1184,20 @@ window.__ModuleLoader__.load({
               color: 'var(--dsw-alias-label-primary)',
             },
           }, '高级设置'),
+          React.createElement('div', { style: fieldStyle },
+            React.createElement('label', { style: labelStyle }, '路由策略'),
+            React.createElement('select', {
+              value: routingStrategy,
+              onChange: event => setRoutingStrategy(event.target.value),
+              disabled: busy,
+              style: selectStyle,
+            },
+              React.createElement('option', { value: 'balanced' }, '平衡：健康度优先'),
+              React.createElement('option', { value: 'quality' }, '质量：健康度和优先级'),
+              React.createElement('option', { value: 'availability' }, '可用性：优先稳定账号'),
+              React.createElement('option', { value: 'quota' }, '额度：优先剩余额度'),
+            ),
+          ),
           numberField('模型刷新间隔 (ms)', refreshIntervalMs, event => setRefreshIntervalMs(event.target.value)),
           numberField('auth-files 缓存 (ms)', authFilesTtlMs, event => setAuthFilesTtlMs(event.target.value)),
           numberField('quota 缓存 (ms)', quotaTtlMs, event => setQuotaTtlMs(event.target.value)),
@@ -1231,6 +1256,7 @@ window.__ModuleLoader__.load({
           payload.usageStatisticsEnabled = usageStatisticsEnabled
         }
         payload.refreshIntervalMs = Number(refreshIntervalMs)
+        payload.routingStrategy = routingStrategy
         if (mode === 'internal') {
           payload.port = Number(port)
           if (configPath.trim() !== '') payload.configPath = configPath.trim()
@@ -1253,6 +1279,7 @@ window.__ModuleLoader__.load({
           setExternalUrl(body.external?.url || '')
           setInternalBin(body.bin || '')
           setUsageStatisticsEnabled(body.usageStatisticsEnabled !== false)
+          setRoutingStrategy(body.routingStrategy || 'balanced')
           setRefreshIntervalMs(String(body.refreshIntervalMs ?? refreshIntervalMs))
           setPort(String(body.port ?? port))
           setConfigPath(body.configPath || configPath)

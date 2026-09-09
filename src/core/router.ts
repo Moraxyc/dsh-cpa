@@ -1,5 +1,5 @@
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
-import type { CpaModel } from './config.js'
+import type { CpaModel, CpaRoutingStrategy } from './config.js'
 
 export interface CpaRouteAccount {
   authIndex: string
@@ -33,6 +33,7 @@ export interface CpaRouteSnapshot {
   quota: Readonly<Record<string, CpaRouteQuota>>
   defaultContextWindow: number
   defaultMaxTokens: number
+  routingStrategy?: CpaRoutingStrategy
 }
 
 export type CpaRouteHealth = 'healthy' | 'degraded' | 'unavailable' | 'unknown'
@@ -137,6 +138,32 @@ function healthRank(health: CpaRouteHealth): number {
     case 'unknown': return 1
     case 'unavailable': return 0
   }
+}
+
+function compareCandidates(
+  left: CpaRouteCandidate,
+  right: CpaRouteCandidate,
+  strategy: CpaRoutingStrategy,
+): number {
+  const leftRemaining = left.remainingPercent ?? -1
+  const rightRemaining = right.remainingPercent ?? -1
+  const health = healthRank(right.health) - healthRank(left.health)
+  const quota = rightRemaining - leftRemaining
+  const priority = right.priority - left.priority
+  if (strategy === 'quota') {
+    if (quota !== 0) return quota
+    if (health !== 0) return health
+    if (priority !== 0) return priority
+  } else if (strategy === 'quality') {
+    if (health !== 0) return health
+    if (priority !== 0) return priority
+    if (quota !== 0) return quota
+  } else {
+    if (health !== 0) return health
+    if (quota !== 0) return quota
+    if (priority !== 0) return priority
+  }
+  return left.model.localeCompare(right.model, undefined, { numeric: true, sensitivity: 'base' })
 }
 
 function scoreWindows(windows: readonly CpaRouteWindow[]): Pick<ModelQuotaScore, 'remaining' | 'exhausted'> {
@@ -320,16 +347,7 @@ export function planCpaRoute(
     .map(model => routeCandidate(model, options, snapshot))
   const eligible = alternatives
     .filter(candidate => candidate.eligible)
-    .sort((left, right) => {
-      if (healthRank(right.health) !== healthRank(left.health)) {
-        return healthRank(right.health) - healthRank(left.health)
-      }
-      const leftRemaining = left.remainingPercent ?? -1
-      const rightRemaining = right.remainingPercent ?? -1
-      if (rightRemaining !== leftRemaining) return rightRemaining - leftRemaining
-      if (right.priority !== left.priority) return right.priority - left.priority
-      return left.model.localeCompare(right.model, undefined, { numeric: true, sensitivity: 'base' })
-    })
+    .sort((left, right) => compareCandidates(left, right, snapshot.routingStrategy ?? 'balanced'))
   const models = [options.model, ...eligible.map(candidate => candidate.model)]
     .slice(0, Math.max(1, maxAttempts))
   return {

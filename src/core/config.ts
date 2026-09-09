@@ -18,8 +18,10 @@ export const DEFAULT_MAX_TOKENS = 32_768
 export const DEFAULT_AUTH_FILES_TTL_MS = 30_000
 export const DEFAULT_QUOTA_TTL_MS = 60_000
 export const DEFAULT_QUOTA_CONCURRENCY = 4
+export const DEFAULT_ROUTING_STRATEGY = 'balanced'
 
 export type CpaMode = 'internal' | 'external' | 'off'
+export type CpaRoutingStrategy = 'balanced' | 'quality' | 'availability' | 'quota'
 export type ConfigScalar = string | number | boolean | null | undefined
 
 export interface CpaSettings {
@@ -29,6 +31,7 @@ export interface CpaSettings {
   externalManagementKey: string
   internalBin: string
   usageStatisticsEnabled: boolean
+  routingStrategy: CpaRoutingStrategy
   refreshIntervalMs: number
   port: number
   configPath: string
@@ -67,6 +70,7 @@ export interface CpaSettingsInput {
   externalManagementKey?: ConfigScalar
   internalBin?: ConfigScalar
   usageStatisticsEnabled?: ConfigScalar
+  routingStrategy?: ConfigScalar
   refreshIntervalMs?: ConfigScalar
   port?: ConfigScalar
   configPath?: ConfigScalar
@@ -199,6 +203,11 @@ export function sanitizeCpaSettings(value: CpaSettingsInput | null | undefined):
     externalManagementKey: isString(source.externalManagementKey) ? source.externalManagementKey : '',
     internalBin: isString(source.internalBin) ? source.internalBin.trim() : '',
     usageStatisticsEnabled: source.usageStatisticsEnabled !== false,
+    routingStrategy: source.routingStrategy === 'quality'
+      || source.routingStrategy === 'availability'
+      || source.routingStrategy === 'quota'
+      ? source.routingStrategy
+      : DEFAULT_ROUTING_STRATEGY,
     refreshIntervalMs: positiveNumber(source.refreshIntervalMs, DEFAULT_REFRESH_MS),
     port: Number.isInteger(Number(source.port)) && Number(source.port) > 0
       ? Number(source.port)

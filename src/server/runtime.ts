@@ -8,6 +8,7 @@ import {
   DEFAULT_QUOTA_CONCURRENCY,
   DEFAULT_QUOTA_TTL_MS,
   DEFAULT_REFRESH_MS,
+  DEFAULT_ROUTING_STRATEGY,
   fetchModels,
   positiveNumber,
   randomKey,
@@ -23,6 +24,7 @@ import type {
   CpaMode,
   CpaModel,
   CpaOptions,
+  CpaRoutingStrategy,
   CpaSettings,
 } from '../core/config.js'
 import { isBoolean, isError, isNumber, isString } from '../core/json.js'
@@ -94,6 +96,12 @@ function positiveInteger(value: ConfigScalar, fallback: number): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
 }
 
+function routingStrategy(value: JsonValue | undefined, fallback: CpaRoutingStrategy): CpaRoutingStrategy {
+  return value === 'quality' || value === 'availability' || value === 'quota' || value === 'balanced'
+    ? value
+    : fallback
+}
+
 function scalar(value: JsonValue | undefined): ConfigScalar {
   return isString(value) || isNumber(value) || isBoolean(value) || value === null ? value : undefined
 }
@@ -145,6 +153,7 @@ export function resolveInitialCpaSettings(
     externalManagementKey: options.managementKey,
     internalBin: options.bin || '',
     usageStatisticsEnabled: true,
+    routingStrategy: DEFAULT_ROUTING_STRATEGY,
     refreshIntervalMs: options.refreshIntervalMs ?? DEFAULT_REFRESH_MS,
     port: options.port ?? DEFAULT_PORT,
     configPath: options.configPath || '',
@@ -163,6 +172,7 @@ export function resolveInitialCpaSettings(
     externalManagementKey: persisted.externalManagementKey || initial.externalManagementKey || '',
     internalBin: persisted.internalBin || initial.internalBin || '',
     usageStatisticsEnabled: persisted.usageStatisticsEnabled !== false,
+    routingStrategy: routingStrategy(persisted.routingStrategy, initial.routingStrategy),
     refreshIntervalMs: persisted.refreshIntervalMs || initial.refreshIntervalMs,
     port: persisted.port || initial.port,
     configPath: persisted.configPath || initial.configPath,
@@ -192,6 +202,14 @@ export function mergeCpaSettings(current: CpaSettings, patch: JsonRecord): CpaSe
   if (isString(patch.externalManagementKey)) next.externalManagementKey = patch.externalManagementKey
   if (isString(patch.internalBin)) next.internalBin = patch.internalBin.trim()
   if (isBoolean(patch.usageStatisticsEnabled)) next.usageStatisticsEnabled = patch.usageStatisticsEnabled
+  if (patch.routingStrategy !== undefined) {
+    if (patch.routingStrategy === 'balanced' || patch.routingStrategy === 'quality'
+      || patch.routingStrategy === 'availability' || patch.routingStrategy === 'quota') {
+      next.routingStrategy = patch.routingStrategy
+    } else {
+      throw new Error('invalid routing strategy')
+    }
+  }
   if (patch.refreshIntervalMs !== undefined) next.refreshIntervalMs = positiveNumber(scalar(patch.refreshIntervalMs), next.refreshIntervalMs)
   if (patch.port !== undefined) next.port = positiveInteger(scalar(patch.port), next.port)
   if (patch.authFilesTtlMs !== undefined) next.authFilesTtlMs = positiveNumber(scalar(patch.authFilesTtlMs), next.authFilesTtlMs)
@@ -211,6 +229,7 @@ export function cpaSettingsEqual(left: CpaSettings, right: CpaSettings): boolean
     && left.externalManagementKey === right.externalManagementKey
     && left.internalBin === right.internalBin
     && left.usageStatisticsEnabled === right.usageStatisticsEnabled
+    && left.routingStrategy === right.routingStrategy
     && left.refreshIntervalMs === right.refreshIntervalMs
     && left.port === right.port
     && left.configPath === right.configPath
@@ -293,6 +312,7 @@ export class CpaController {
       quota: status.quota,
       defaultContextWindow: this.options.defaultContextWindow,
       defaultMaxTokens: this.options.defaultMaxTokens,
+      routingStrategy: this.settings.routingStrategy,
     })
   }
 
@@ -377,6 +397,7 @@ export class CpaController {
       },
       bin: this.settings.internalBin || this.options.bin,
       usageStatisticsEnabled: this.settings.usageStatisticsEnabled,
+      routingStrategy: this.settings.routingStrategy,
       refreshIntervalMs: this.settings.refreshIntervalMs,
       port: this.settings.port,
       configPath: this.settings.configPath,
