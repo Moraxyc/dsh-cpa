@@ -1568,6 +1568,35 @@ test('CpaQuotaService resolves live baseURL and management key', async () => {
   }
 })
 
+test('CpaQuotaService keeps the cached snapshot when management is offline', async () => {
+  const server = createServer((req, res) => {
+    req.resume()
+    res.writeHead(500, { connection: 'close' })
+    res.end('management unavailable')
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const { port } = server.address()
+    const service = new CpaQuotaService({
+      baseURL: `http://127.0.0.1:${port}/v1`,
+      managementKey: 'mgmt-live',
+      authFilesTtlMs: 1,
+      quotaTtlMs: 1,
+      concurrency: 1,
+    })
+    service.accounts = sanitizeAuthFiles([{
+      auth_index: 'auth-cached',
+      label: 'cached account',
+      provider: 'codex',
+    }])
+    const status = await service.status()
+    assert.deepEqual(status.accounts.map(account => account.authIndex), ['auth-cached'])
+    assert.deepEqual(status.quota, {})
+  } finally {
+    await new Promise(resolve => server.close(resolve))
+  }
+})
+
 test('execution store persists sanitized records without credentials', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-cpa-exec-'))
   const filePath = join(dir, 'executions.json')

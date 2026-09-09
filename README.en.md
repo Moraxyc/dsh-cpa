@@ -63,6 +63,11 @@ composer CPA readout shows the actual attempt chain and fallback reason.
 Quota windows share normal, warning, critical, and unknown risk labels that are
 also used by candidate routing.
 
+When the management API is temporarily unavailable, the plugin keeps using the
+last sanitized account/quota snapshot for basic routing. If no snapshot exists,
+it preserves request availability and does not present a management failure as
+fresh quota data.
+
 Credential ownership and account switching remain inside CPA. The plugin
 consumes sanitized account and quota data without reimplementing CPA account
 management.

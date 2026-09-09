@@ -955,7 +955,12 @@ export class CpaQuotaService {
 
   async status(): Promise<CpaQuotaStatus> {
     const now = Date.now()
-    await this.ensureAccounts(now)
+    try {
+      await this.ensureAccounts(now)
+    } catch {
+      // Keep the last sanitized snapshot usable when management is temporarily offline.
+      return this.snapshot()
+    }
     try {
       await this.refreshQuota(now)
     } catch {
