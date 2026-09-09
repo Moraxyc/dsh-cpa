@@ -4,7 +4,7 @@ import { Readable } from 'node:stream'
 import type { CpaMode } from '../core/config.js'
 import { isFunction, isJsonRecord, isNumber, isString } from '../core/json.js'
 import type { JsonRecord, JsonValue } from '../core/json.js'
-import type { ExecutionRecord } from '../core/services.js'
+import type { ExecutionRecord, LocalUsageSummary } from '../core/services.js'
 import { emptyCpaSummary } from './data.js'
 import type { CpaSummary } from './data.js'
 import { optionValue } from './quota.js'
@@ -79,6 +79,7 @@ export interface CpaDiagnostics {
   accounts: CpaQuotaStatus['accounts']
   quota: CpaQuotaStatus['quota']
   modelAccounts: Record<string, string[]>
+  localUsage: LocalUsageSummary
   errors: string[]
 }
 
@@ -379,6 +380,21 @@ function emptyDiagnostics(): CpaDiagnostics {
     accounts: [],
     quota: {},
     modelAccounts: {},
+    localUsage: {
+      since: new Date(0).toISOString(),
+      fetchedAt: new Date().toISOString(),
+      retainedRecords: 0,
+      totals: {
+        totalRequests: 0,
+        successRequests: 0,
+        failedRequests: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        successRate: 0,
+      },
+      models: [],
+    },
     errors: [],
   }
 }

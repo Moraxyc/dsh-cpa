@@ -1630,6 +1630,38 @@ test('execution store persists sanitized records without credentials', async () 
       time: 125,
     })
     assert.deepEqual(reloaded.recent('s1').map(record => record.traceId), ['trace-3', 'trace-2', 'trace-1'])
+    const localUsage = reloaded.localUsage(123)
+    assert.equal(localUsage.since, new Date(123).toISOString())
+    assert.equal(localUsage.retainedRecords, 3)
+    assert.deepEqual(localUsage.totals, {
+      totalRequests: 3,
+      successRequests: 2,
+      failedRequests: 1,
+      inputTokens: 11,
+      outputTokens: 3,
+      totalTokens: 14,
+      successRate: 2 / 3,
+    })
+    assert.deepEqual(localUsage.models, [
+      {
+        modelId: 'unknown',
+        totalRequests: 2,
+        successRequests: 1,
+        failedRequests: 1,
+        inputTokens: 1,
+        outputTokens: 1,
+        totalTokens: 2,
+      },
+      {
+        modelId: 'gpt-5',
+        totalRequests: 1,
+        successRequests: 1,
+        failedRequests: 0,
+        inputTokens: 10,
+        outputTokens: 2,
+        totalTokens: 12,
+      },
+    ])
     assert.equal(sanitizeExecutionRecord({ time: 1 }), undefined)
     assert.equal(sanitizeExecutionRecord(null), undefined)
   } finally {

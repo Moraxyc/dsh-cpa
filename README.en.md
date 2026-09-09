@@ -125,7 +125,9 @@ management entry point.
 
 The read-only `/dsh-cpa/diagnostics` endpoint returns sanitized runtime, model
 sync, management API, account, and quota checks plus a model-to-account
-availability matrix. The settings page exposes these checks in "CPA Connection
+availability matrix. It also includes the last 24 hours of dsh-cpa-local
+execution totals for requests, failures, and tokens, kept separate from CPA's
+official usage data. The settings page exposes these checks in "CPA Connection
 Diagnostics" with a manual refresh action.
 
 `POST /dsh-cpa/preflight` accepts `{ model, inputTokens, maxTokens,

@@ -68,6 +68,32 @@ export interface CpaUsageProjection extends CpaSessionStats {
   latest: ExecutionRecord
 }
 
+export interface LocalUsageModel {
+  modelId: string
+  totalRequests: number
+  successRequests: number
+  failedRequests: number
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+}
+
+export interface LocalUsageSummary {
+  since: string
+  fetchedAt: string
+  retainedRecords: number
+  totals: {
+    totalRequests: number
+    successRequests: number
+    failedRequests: number
+    inputTokens: number
+    outputTokens: number
+    totalTokens: number
+    successRate: number
+  }
+  models: LocalUsageModel[]
+}
+
 export interface ProjectionSchema<T> {
   parse(value: T): T
 }
@@ -128,6 +154,76 @@ export function emptyCpaSessionStats(): CpaSessionStats {
     inputTokens: 0,
     outputTokens: 0,
     byAccount: {},
+  }
+}
+
+export function emptyLocalUsageSummary(since = new Date(0)): LocalUsageSummary {
+  return {
+    since: since.toISOString(),
+    fetchedAt: new Date().toISOString(),
+    retainedRecords: 0,
+    totals: {
+      totalRequests: 0,
+      successRequests: 0,
+      failedRequests: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      successRate: 0,
+    },
+    models: [],
+  }
+}
+
+export function summarizeLocalUsage(
+  records: readonly ExecutionRecord[],
+  since = Date.now() - 24 * 60 * 60 * 1000,
+): LocalUsageSummary {
+  const models = new Map<string, LocalUsageModel>()
+  const totals = emptyLocalUsageSummary(new Date(since)).totals
+  const retained = records.filter(record => record.time >= since)
+  for (const record of retained) {
+    const modelId = record.model || 'unknown'
+    const inputTokens = record.inputTokens ?? 0
+    const outputTokens = record.outputTokens ?? 0
+    const model = models.get(modelId) ?? {
+      modelId,
+      totalRequests: 0,
+      successRequests: 0,
+      failedRequests: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+    }
+    model.totalRequests += 1
+    if (record.outcome === 'success') {
+      model.successRequests += 1
+      totals.successRequests += 1
+    } else if (record.outcome === 'failure') {
+      model.failedRequests += 1
+      totals.failedRequests += 1
+    }
+    model.inputTokens += inputTokens
+    model.outputTokens += outputTokens
+    model.totalTokens += inputTokens + outputTokens
+    models.set(modelId, model)
+    totals.inputTokens += inputTokens
+    totals.outputTokens += outputTokens
+  }
+  totals.totalRequests = totals.successRequests + totals.failedRequests
+  totals.totalTokens = totals.inputTokens + totals.outputTokens
+  totals.successRate = totals.totalRequests > 0
+    ? totals.successRequests / totals.totalRequests
+    : 0
+  return {
+    since: new Date(since).toISOString(),
+    fetchedAt: new Date().toISOString(),
+    retainedRecords: retained.length,
+    totals,
+    models: [...models.values()].sort((left, right) => {
+      if (right.totalRequests !== left.totalRequests) return right.totalRequests - left.totalRequests
+      return left.modelId.localeCompare(right.modelId, undefined, { numeric: true, sensitivity: 'base' })
+    }),
   }
 }
 
@@ -292,6 +388,10 @@ export class CpaExecutionStore {
       .filter(record => record.sessionId === sessionId)
       .sort((left, right) => right.time - left.time)
       .slice(0, limit)
+  }
+
+  localUsage(since = Date.now() - 24 * 60 * 60 * 1000): LocalUsageSummary {
+    return summarizeLocalUsage([...this.byId.values()], since)
   }
 
   async append(value: ExecutionInput | null | undefined): Promise<ExecutionRecord | undefined> {

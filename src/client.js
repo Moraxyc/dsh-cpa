@@ -1338,6 +1338,9 @@ window.__ModuleLoader__.load({
       const modelAccounts = diagnostics?.modelAccounts && typeof diagnostics.modelAccounts === 'object'
         ? diagnostics.modelAccounts
         : {}
+      const localUsage = diagnostics?.localUsage && typeof diagnostics.localUsage === 'object'
+        ? diagnostics.localUsage
+        : null
       const statusLabel = diagnostics?.status === 'healthy'
         ? '正常'
         : diagnostics?.status === 'warning'
@@ -1392,6 +1395,32 @@ window.__ModuleLoader__.load({
           ),
         )
         : null
+      const localUsageTotals = localUsage?.totals && typeof localUsage.totals === 'object'
+        ? localUsage.totals
+        : {}
+      const localUsageBlock = localUsage
+        ? React.createElement('div', { className: 'dsh-cpa-summary-block' },
+          React.createElement('div', { className: 'dsh-cpa-summary-block-title' }, '本地执行（近 24 小时）'),
+          React.createElement('div', { className: 'dsh-cpa-summary-grid' },
+            React.createElement('span', { className: 'dsh-cpa-summary-item' },
+              React.createElement('span', { className: 'dsh-cpa-summary-key' }, '请求'),
+              React.createElement('span', { className: 'dsh-cpa-summary-value' }, formatSummaryNumber(localUsageTotals.totalRequests)),
+            ),
+            React.createElement('span', { className: 'dsh-cpa-summary-item' },
+              React.createElement('span', { className: 'dsh-cpa-summary-key' }, '失败'),
+              React.createElement('span', { className: 'dsh-cpa-summary-value' }, formatSummaryNumber(localUsageTotals.failedRequests)),
+            ),
+            React.createElement('span', { className: 'dsh-cpa-summary-item' },
+              React.createElement('span', { className: 'dsh-cpa-summary-key' }, 'tokens'),
+              React.createElement('span', { className: 'dsh-cpa-summary-value' }, formatSummaryNumber(localUsageTotals.totalTokens)),
+            ),
+            React.createElement('span', { className: 'dsh-cpa-summary-item' },
+              React.createElement('span', { className: 'dsh-cpa-summary-key' }, '保留记录'),
+              React.createElement('span', { className: 'dsh-cpa-summary-value' }, formatSummaryNumber(localUsage.retainedRecords)),
+            ),
+          ),
+        )
+        : null
 
       return React.createElement('div', { className: 'dsh-cpa-summary' },
         header,
@@ -1399,6 +1428,7 @@ window.__ModuleLoader__.load({
           className: `dsh-cpa-summary-status${statusWarning ? ' dsh-cpa-summary-status-warning' : ''}`,
         }, error || statusLabel),
         checkList,
+        localUsageBlock,
         modelList,
       )
     }

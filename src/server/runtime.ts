@@ -382,6 +382,7 @@ export class CpaController {
       accounts: status.accounts,
       quota: status.quota,
       modelAccounts: modelAccounts(this.models, status.accounts),
+      localUsage: this.executionStore.localUsage(),
       errors,
     }
   }
