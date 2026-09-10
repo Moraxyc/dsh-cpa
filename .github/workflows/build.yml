@@ -34,5 +34,15 @@ jobs:
             - name: Run tests
               run: npm test
 
+            - name: Verify committed build artifacts are up to date
+              run: |
+                  if [ -n "$(git status --porcelain src/)" ]; then
+                      echo "Error: Committed build artifacts in src/ are out of sync with TypeScript sources."
+                      echo "Please run 'npm run build' and commit all generated files."
+                      git status --porcelain src/
+                      git diff src/
+                      exit 1
+                  fi
+
             - name: Verify npm package
               run: npm pack --dry-run

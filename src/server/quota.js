@@ -1,0 +1,827 @@
+import { asJsonRecord, isArray, isBoolean, isJsonRecord, isNonEmptyString, isNumber, isString } from '../core/json.js';
+const CODE_5H = 5 * 60 * 60;
+const CODE_7D = 7 * 24 * 60 * 60;
+const WHAM_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
+const LOAD_CODE_ASSIST_URL = 'https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist';
+const RETRIEVE_USER_QUOTA_URL = 'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota';
+const FETCH_AVAILABLE_MODELS_URL = 'https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels';
+const API_TIMEOUT_MS = 20_000;
+const PROVIDER_KEY_ENDPOINTS = [
+    { path: '/v0/management/gemini-api-key', key: 'gemini-api-key', provider: 'gemini' },
+    { path: '/v0/management/interactions-api-key', key: 'interactions-api-key', provider: 'interactions' },
+    { path: '/v0/management/claude-api-key', key: 'claude-api-key', provider: 'claude' },
+    { path: '/v0/management/codex-api-key', key: 'codex-api-key', provider: 'codex' },
+    { path: '/v0/management/xai-api-key', key: 'xai-api-key', provider: 'xai' },
+    { path: '/v0/management/vertex-api-key', key: 'vertex-api-key', provider: 'vertex' },
+    { path: '/v0/management/openai-compatibility', key: 'openai-compatibility', provider: 'openai-compatibility' },
+];
+function isResolver(value) {
+    return typeof value === 'function';
+}
+export function optionValue(value) {
+    return value === undefined ? undefined : isResolver(value) ? value() : value;
+}
+export function resolvedOption(value) {
+    return isResolver(value) ? value() : value;
+}
+export function compactNumber(value, fallback) {
+    if (value === null || value === undefined || value === '')
+        return fallback;
+    if (isNumber(value))
+        return value;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+}
+export function clampPercent(value) {
+    return Math.min(100, Math.max(0, value));
+}
+export function deriveQuotaRisk(remainingPercent, exhausted) {
+    if (exhausted || remainingPercent !== null && remainingPercent <= 5)
+        return 'critical';
+    if (remainingPercent === null)
+        return 'unknown';
+    if (remainingPercent <= 20)
+        return 'warning';
+    return 'normal';
+}
+function reportRisk(windows) {
+    if (windows.some(window => window.risk === 'critical'))
+        return 'critical';
+    if (windows.some(window => window.risk === 'warning'))
+        return 'warning';
+    if (windows.some(window => window.risk === 'normal'))
+        return 'normal';
+    return 'unknown';
+}
+export function formatResetLabel(value) {
+    if (!Number.isFinite(value) || value <= 0)
+        return '';
+    const date = new Date(value * 1000);
+    const pad = (number) => String(number).padStart(2, '0');
+    return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+export function deriveStatus(windows) {
+    if (windows.length === 0)
+        return 'unknown';
+    const values = windows
+        .map(window => window.remainingPercent)
+        .filter((value) => value !== null);
+    if (values.length === 0)
+        return 'unknown';
+    const min = Math.min(...values);
+    if (min <= 0)
+        return 'exhausted';
+    if (min <= 30)
+        return 'low';
+    if (min <= 70)
+        return 'medium';
+    if (min < 100)
+        return 'high';
+    return 'full';
+}
+function firstScalar(source, keys) {
+    for (const key of keys) {
+        const value = source?.[key];
+        if (value !== null && value !== undefined && value !== '')
+            return value;
+    }
+    return undefined;
+}
+function firstRecord(source, keys) {
+    for (const key of keys) {
+        const value = source?.[key];
+        if (isJsonRecord(value))
+            return value;
+    }
+    return null;
+}
+export function normalizeCodexWindows(payload, now = new Date()) {
+    const rateLimit = firstRecord(payload, ['rate_limit', 'rateLimit']);
+    const windows = [];
+    const primary = firstRecord(rateLimit, ['primary_window', 'primaryWindow']);
+    const secondary = firstRecord(rateLimit, ['secondary_window', 'secondaryWindow']);
+    const candidates = [primary, secondary].filter((candidate) => candidate !== null);
+    let fiveHour = candidates.find(candidate => compactNumber(firstScalar(candidate, ['limit_window_seconds', 'limitWindowSeconds']), 0) === CODE_5H);
+    let weekly = candidates.find(candidate => compactNumber(firstScalar(candidate, ['limit_window_seconds', 'limitWindowSeconds']), 0) === CODE_7D);
+    if (fiveHour === undefined && primary !== null)
+        fiveHour = primary;
+    if (weekly === undefined && secondary !== null)
+        weekly = secondary;
+    const exhausted = Boolean(firstScalar(rateLimit, ['limit_reached', 'limitReached']))
+        || firstScalar(rateLimit, ['allowed']) === false;
+    for (const [id, label, window] of [
+        ['code-5h', '5h', fiveHour],
+        ['code-7d', '7d', weekly],
+    ]) {
+        if (window === undefined)
+            continue;
+        windows.push(normalizeCodexWindow(id, label, window, exhausted, now));
+    }
+    return windows;
+}
+function normalizeCodexWindow(id, label, window, exhausted, now) {
+    const used = compactNumber(firstScalar(window, ['used_percent', 'usedPercent']), null);
+    const resetAt = compactNumber(firstScalar(window, ['reset_at', 'resetAt']), 0) ?? 0;
+    const resetAfter = compactNumber(firstScalar(window, ['reset_after_seconds', 'resetAfterSeconds']), 0) ?? 0;
+    const hasReset = resetAt > 0 || resetAfter > 0;
+    const reset = resetAt > 0 ? resetAt : resetAfter > 0 ? now.getTime() / 1000 + resetAfter : 0;
+    const remainingPercent = used === null
+        ? (exhausted && hasReset ? 0 : null)
+        : clampPercent(100 - used);
+    const isExhausted = used !== null ? used >= 100 : (exhausted && hasReset);
+    return {
+        id,
+        label,
+        remainingPercent,
+        resetLabel: formatResetLabel(reset),
+        exhausted: isExhausted,
+        risk: deriveQuotaRisk(remainingPercent, isExhausted),
+    };
+}
+export function normalizeGeminiWindows(payload) {
+    const buckets = isArray(payload?.buckets) ? payload.buckets : [];
+    const groups = new Map();
+    const extras = [];
+    for (const bucket of buckets) {
+        if (!isJsonRecord(bucket))
+            continue;
+        const modelId = String(firstScalar(bucket, ['modelId', 'model_id']) ?? '').replace(/_vertex$/, '');
+        if (modelId === '')
+            continue;
+        const remaining = compactNumber(firstScalar(bucket, ['remainingFraction', 'remaining_fraction', 'remaining']), null);
+        const remainingPercent = remaining === null ? null : clampPercent(remaining * 100);
+        const reset = formatResetLabel(compactNumber(firstScalar(bucket, ['resetTime', 'reset_time']), 0) ?? 0);
+        const group = geminiGroup(modelId);
+        if (group === undefined) {
+            extras.push({
+                id: modelId,
+                label: modelId,
+                remainingPercent,
+                resetLabel: reset,
+                exhausted: remaining !== null && remaining <= 0,
+                risk: deriveQuotaRisk(remainingPercent, remaining !== null && remaining <= 0),
+            });
+            continue;
+        }
+        const current = groups.get(group.id) ?? { remainingPercent: null, resetLabel: '', exhausted: false };
+        current.remainingPercent = remainingPercent === null
+            ? current.remainingPercent
+            : current.remainingPercent === null
+                ? remainingPercent
+                : Math.min(current.remainingPercent, remainingPercent);
+        current.resetLabel = current.resetLabel || reset;
+        current.exhausted = current.exhausted || (remaining !== null && remaining <= 0);
+        groups.set(group.id, current);
+    }
+    const windows = [];
+    for (const group of GEMINI_GROUPS) {
+        const current = groups.get(group.id);
+        if (current === undefined)
+            continue;
+        windows.push({
+            id: group.id,
+            label: group.label,
+            ...current,
+            risk: deriveQuotaRisk(current.remainingPercent, current.exhausted),
+        });
+    }
+    extras.sort((left, right) => left.label.localeCompare(right.label));
+    windows.push(...extras);
+    return windows;
+}
+const GEMINI_GROUPS = [
+    { id: 'gemini-flash-lite-series', label: 'Gemini Flash Lite Series', models: ['gemini-2.5-flash-lite'] },
+    { id: 'gemini-flash-series', label: 'Gemini Flash Series', models: ['gemini-3-flash-preview', 'gemini-2.5-flash'] },
+    { id: 'gemini-pro-series', label: 'Gemini Pro Series', models: ['gemini-3.1-pro-preview', 'gemini-3-pro-preview', 'gemini-2.5-pro'] },
+];
+function geminiGroup(modelId) {
+    return GEMINI_GROUPS.find(group => group.models.includes(modelId));
+}
+export function normalizeAntigravityWindows(payload) {
+    const models = payload?.models;
+    if (!isJsonRecord(models))
+        return [];
+    const windows = [];
+    for (const [modelId, entry] of Object.entries(models)) {
+        if (!isJsonRecord(entry))
+            continue;
+        const quota = isJsonRecord(entry.quotaInfo)
+            ? entry.quotaInfo
+            : isJsonRecord(entry.quota_info)
+                ? entry.quota_info
+                : {};
+        const remaining = compactNumber(firstScalar(quota, ['remainingFraction', 'remaining_fraction', 'remaining']), null);
+        const remainingPercent = remaining === null ? null : clampPercent(remaining * 100);
+        const reset = formatResetLabel(compactNumber(firstScalar(quota, ['resetTime', 'reset_time']), 0) ?? 0);
+        const exhausted = remaining !== null && remaining <= 0;
+        windows.push({
+            id: modelId,
+            label: isString(entry.displayName) ? entry.displayName : modelId,
+            remainingPercent,
+            resetLabel: reset,
+            exhausted,
+            risk: deriveQuotaRisk(remainingPercent, exhausted),
+        });
+    }
+    return windows;
+}
+export function normalizeQuotaReport(provider, label, authIndex, planType, payload, now = new Date()) {
+    const windows = provider === 'codex'
+        ? normalizeCodexWindows(payload, now)
+        : provider === 'gemini-cli'
+            ? normalizeGeminiWindows(payload)
+            : provider === 'antigravity'
+                ? normalizeAntigravityWindows(payload)
+                : [];
+    const status = deriveStatus(windows);
+    return {
+        provider,
+        authIndex,
+        label,
+        planType: planType || '',
+        status,
+        risk: reportRisk(windows),
+        windows,
+        refreshedAt: now.toISOString(),
+    };
+}
+function parseBody(body) {
+    if (body === null || body === undefined || body === '')
+        return null;
+    if (isJsonRecord(body))
+        return body;
+    try {
+        const parsed = JSON.parse(String(body));
+        return isJsonRecord(parsed) ? parsed : null;
+    }
+    catch {
+        return null;
+    }
+}
+function parseJwtPayload(value) {
+    if (value === null || value === undefined || value === '')
+        return null;
+    if (isJsonRecord(value))
+        return value;
+    const text = String(value);
+    if (text.startsWith('{')) {
+        try {
+            const parsed = JSON.parse(text);
+            return isJsonRecord(parsed) ? parsed : null;
+        }
+        catch {
+            return null;
+        }
+    }
+    const payload = text.split('.')[1];
+    if (payload === undefined)
+        return null;
+    try {
+        const decoded = Buffer.from(payload.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+        const parsed = JSON.parse(decoded);
+        return isJsonRecord(parsed) ? parsed : null;
+    }
+    catch {
+        return null;
+    }
+}
+function stringOrEmpty(value) {
+    return isString(value) ? value.trim() : '';
+}
+function firstNumber(entry, keys) {
+    for (const key of keys) {
+        const value = firstScalar(entry, [key]);
+        if (value === undefined)
+            continue;
+        const parsed = Number(value);
+        if (Number.isFinite(parsed))
+            return parsed;
+    }
+    return undefined;
+}
+function modelAliases(entry) {
+    const models = isArray(entry.models)
+        ? entry.models
+        : isArray(entry.model_aliases)
+            ? entry.model_aliases
+            : [];
+    const aliases = [];
+    for (const model of models) {
+        if (!isJsonRecord(model))
+            continue;
+        const alias = stringOrEmpty(firstScalar(model, ['alias', 'name']));
+        if (alias !== '' && !aliases.includes(alias))
+            aliases.push(alias);
+    }
+    return aliases.slice(0, 20);
+}
+function nestedValue(entry, keys) {
+    return firstScalar(firstRecord(entry, ['metadata', 'attributes']), keys);
+}
+function accountId(entry) {
+    const token = firstScalar(entry, ['id_token']) ?? nestedValue(entry, ['id_token']);
+    const claims = parseJwtPayload(token);
+    if (claims === null)
+        return '';
+    const direct = stringOrEmpty(firstScalar(claims, ['chatgpt_account_id']));
+    const auth = firstRecord(claims, ['https://api.openai.com/auth']);
+    const nested = stringOrEmpty(firstScalar(auth, ['chatgpt_account_id']));
+    return direct || nested;
+}
+function planType(entry) {
+    return stringOrEmpty(firstScalar(entry, ['plan_type', 'planType'])
+        ?? nestedValue(entry, ['plan_type', 'planType']));
+}
+function projectId(entry) {
+    return stringOrEmpty(firstScalar(entry, ['project_id'])
+        ?? nestedValue(entry, ['project_id']));
+}
+export function cpaManagementRoot(baseURL) {
+    return String(baseURL).replace(/\/+$/, '').replace(/\/v1$/, '');
+}
+export function sanitizeAuthFile(entry) {
+    if (!isJsonRecord(entry))
+        return undefined;
+    const authIndex = stringOrEmpty(firstScalar(entry, ['auth_index', 'authIndex']));
+    if (authIndex === '')
+        return undefined;
+    const label = stringOrEmpty(firstScalar(entry, ['label', 'name', 'id'])) || authIndex;
+    const name = stringOrEmpty(firstScalar(entry, ['name', 'id']));
+    const provider = (stringOrEmpty(firstScalar(entry, ['provider', 'type'])) || 'unknown').toLowerCase();
+    const priority = firstNumber(entry, ['priority']);
+    const lastRefresh = stringOrEmpty(firstScalar(entry, ['last_refresh', 'lastRefresh']));
+    const nextRetryAfter = stringOrEmpty(firstScalar(entry, ['next_retry_after', 'nextRetryAfter']));
+    const statusMessage = stringOrEmpty(firstScalar(entry, ['status_message', 'statusMessage']));
+    const source = stringOrEmpty(firstScalar(entry, ['source'])) || 'auth-file';
+    const note = stringOrEmpty(firstScalar(entry, ['note']));
+    const recentRequestBuckets = isArray(entry.recent_requests)
+        ? entry.recent_requests
+        : isArray(entry.recentRequests)
+            ? entry.recentRequests
+            : [];
+    const recentRequests = recentRequestBuckets.reduce((total, bucket) => {
+        if (!isJsonRecord(bucket))
+            return total;
+        return total + Math.max(0, Number(bucket.success) || 0) + Math.max(0, Number(bucket.failed) || 0);
+    }, 0);
+    const account = {
+        authIndex,
+        label: label.slice(0, 120),
+        provider,
+        status: stringOrEmpty(firstScalar(entry, ['status'])),
+        source,
+        disabled: entry.disabled === true,
+        unavailable: entry.unavailable === true,
+        success: Number.isFinite(Number(entry.success)) ? Number(entry.success) : 0,
+        failed: Number.isFinite(Number(entry.failed)) ? Number(entry.failed) : 0,
+        recentRequests,
+        accountId: accountId(entry),
+        planType: planType(entry),
+        projectId: projectId(entry),
+    };
+    if (name !== '')
+        account.name = name.slice(0, 240);
+    if (statusMessage !== '')
+        account.statusMessage = statusMessage;
+    if (priority !== undefined)
+        account.priority = priority;
+    if (note !== '')
+        account.note = note;
+    if (lastRefresh !== '')
+        account.lastRefresh = lastRefresh;
+    if (nextRetryAfter !== '')
+        account.nextRetryAfter = nextRetryAfter;
+    if (entry.websockets === true)
+        account.websockets = true;
+    if (entry.runtime_only === true || entry.runtimeOnly === true)
+        account.runtimeOnly = true;
+    if (entry.quota_auto_disabled === true || entry.quotaAutoDisabled === true)
+        account.quotaAutoDisabled = true;
+    return account;
+}
+export function sanitizeAuthFiles(files) {
+    if (!isArray(files))
+        return [];
+    return files
+        .map(sanitizeAuthFile)
+        .filter((account) => account !== undefined);
+}
+function sanitizeProviderAccount(entry, provider, fallbackLabel, meta = {}) {
+    const authIndex = stringOrEmpty(firstScalar(entry, ['auth-index', 'authIndex']));
+    if (authIndex === '')
+        return undefined;
+    const label = stringOrEmpty(firstScalar(entry, ['name', 'label', 'prefix', 'base-url', 'baseUrl']))
+        || fallbackLabel
+        || authIndex;
+    const baseUrl = stringOrEmpty(firstScalar(entry, ['base-url', 'baseUrl', 'base_url'])) || meta.baseUrl || '';
+    const prefix = stringOrEmpty(firstScalar(entry, ['prefix'])) || meta.prefix || '';
+    const priority = firstNumber(entry, ['priority']) ?? meta.priority;
+    const note = stringOrEmpty(firstScalar(entry, ['note'])) || meta.note || '';
+    const statusMessage = stringOrEmpty(firstScalar(entry, ['status_message', 'statusMessage'])) || meta.statusMessage || '';
+    const aliases = modelAliases(entry).length > 0 ? modelAliases(entry) : meta.modelAliases || [];
+    const disableCooling = entry.disable_cooling === true || entry['disable-cooling'] === true || entry.disableCooling === true
+        || meta.disableCooling === true;
+    const account = {
+        authIndex,
+        label: label.slice(0, 120),
+        provider,
+        source: meta.source || 'api-key',
+        status: '',
+        disabled: entry.disabled === true,
+        unavailable: false,
+        success: 0,
+        failed: 0,
+        recentRequests: 0,
+        planType: '',
+        accountId: '',
+        projectId: '',
+    };
+    if (statusMessage !== '')
+        account.statusMessage = statusMessage;
+    if (baseUrl !== '')
+        account.baseUrl = baseUrl;
+    if (prefix !== '')
+        account.prefix = prefix;
+    if (priority !== undefined)
+        account.priority = priority;
+    if (note !== '')
+        account.note = note;
+    if (aliases.length > 0)
+        account.modelAliases = aliases;
+    if (disableCooling)
+        account.disableCooling = true;
+    return account;
+}
+const OPENAI_COMPAT_PROVIDER_PREFIXES = [
+    ['deepseek', 'deepseek'],
+    ['openai', 'openai'],
+    ['chatgpt', 'openai'],
+    ['codex', 'openai'],
+    ['claude', 'claude'],
+    ['anthropic', 'claude'],
+    ['gemini', 'gemini'],
+    ['vertex', 'vertex'],
+    ['xai', 'xai'],
+    ['grok', 'xai'],
+    ['qwen', 'qwen'],
+    ['kimi', 'kimi'],
+    ['glm', 'zhipu'],
+    ['doubao', 'doubao'],
+    ['iflow', 'iflow'],
+    ['interactions', 'interactions'],
+];
+function openAIProviderName(entry) {
+    const rawName = stringOrEmpty(firstScalar(entry, ['name']));
+    if (rawName === '')
+        return 'openai-compatibility';
+    const normalized = rawName.toLowerCase().replace(/[_\s-]+/g, ' ').trim();
+    for (const [prefix, provider] of OPENAI_COMPAT_PROVIDER_PREFIXES) {
+        if (normalized.startsWith(prefix))
+            return provider;
+    }
+    return normalized.replace(/\s+/g, '-');
+}
+function providerMeta(entry) {
+    return {
+        source: 'api-key',
+        baseUrl: stringOrEmpty(firstScalar(entry, ['base-url', 'baseUrl', 'base_url'])),
+        prefix: stringOrEmpty(firstScalar(entry, ['prefix'])),
+        priority: firstNumber(entry, ['priority']),
+        note: stringOrEmpty(firstScalar(entry, ['note'])),
+        statusMessage: stringOrEmpty(firstScalar(entry, ['status_message', 'statusMessage'])),
+        modelAliases: modelAliases(entry),
+        disableCooling: entry.disable_cooling === true || entry['disable-cooling'] === true || entry.disableCooling === true,
+    };
+}
+function sanitizeProviderAccounts(body, spec) {
+    const record = asJsonRecord(body);
+    let entries = [];
+    if (isArray(body)) {
+        entries = body;
+    }
+    else if (record !== null) {
+        const keyed = record[spec.key];
+        if (isArray(keyed)) {
+            entries = keyed;
+        }
+        else {
+            const items = record.items;
+            if (isArray(items))
+                entries = items;
+        }
+    }
+    const accounts = [];
+    for (const entry of entries) {
+        if (!isJsonRecord(entry))
+            continue;
+        if (spec.key === 'openai-compatibility') {
+            const provider = openAIProviderName(entry);
+            const label = stringOrEmpty(firstScalar(entry, ['name', 'prefix', 'base-url', 'baseUrl']))
+                || 'OpenAI Compatible';
+            const meta = providerMeta(entry);
+            const top = sanitizeProviderAccount(entry, provider, label, meta);
+            if (top !== undefined)
+                accounts.push(top);
+            const keys = isArray(entry['api-key-entries'])
+                ? entry['api-key-entries']
+                : isArray(entry.api_key_entries)
+                    ? entry.api_key_entries
+                    : isArray(entry.apiKeyEntries)
+                        ? entry.apiKeyEntries
+                        : [];
+            for (let index = 0; index < keys.length; index += 1) {
+                const keyRecord = asJsonRecord(keys[index]);
+                if (keyRecord === null)
+                    continue;
+                const merged = { ...keyRecord };
+                merged.disabled = entry.disabled === true || keyRecord.disabled === true;
+                const account = sanitizeProviderAccount(merged, provider, keys.length > 1 ? `${label} ${index + 1}` : label, meta);
+                if (account !== undefined)
+                    accounts.push(account);
+            }
+            continue;
+        }
+        const account = sanitizeProviderAccount(entry, spec.provider, `${spec.provider} API`, providerMeta(entry));
+        if (account !== undefined)
+            accounts.push(account);
+    }
+    return accounts;
+}
+export async function fetchApiProviders(baseURL, managementKey) {
+    const settled = await Promise.allSettled(PROVIDER_KEY_ENDPOINTS.map(async (spec) => {
+        const body = await managementApi(baseURL, managementKey, spec.path);
+        return sanitizeProviderAccounts(body, spec);
+    }));
+    return settled.flatMap(result => result.status === 'fulfilled' ? result.value : []);
+}
+export function publicAccount(account) {
+    const { accountId: _accountId, projectId: _projectId, ...rest } = account;
+    void _accountId;
+    void _projectId;
+    return rest;
+}
+export async function managementApiWithHeaders(baseURL, managementKey, path) {
+    const url = `${cpaManagementRoot(baseURL)}${path}`;
+    const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+            accept: 'application/json',
+            authorization: `Bearer ${managementKey}`,
+        },
+        signal: AbortSignal.timeout(API_TIMEOUT_MS),
+    });
+    if (!response.ok)
+        throw new Error(`management API ${response.status}`);
+    const raw = await response.json().catch(() => null);
+    const body = isJsonRecord(raw) || isString(raw) || isNumber(raw) || isBoolean(raw) || raw === null || Array.isArray(raw)
+        ? raw
+        : {};
+    return { body, headers: response.headers };
+}
+export async function managementApi(baseURL, managementKey, path) {
+    const { body } = await managementApiWithHeaders(baseURL, managementKey, path);
+    return body;
+}
+export async function fetchAuthFiles(baseURL, managementKey) {
+    const body = await managementApi(baseURL, managementKey, '/v0/management/auth-files');
+    return sanitizeAuthFiles(isJsonRecord(body) ? body.files : undefined);
+}
+async function apiCall(baseURL, managementKey, payload) {
+    const response = await fetch(`${cpaManagementRoot(baseURL)}/v0/management/api-call`, {
+        method: 'POST',
+        headers: {
+            accept: 'application/json',
+            'content-type': 'application/json',
+            authorization: `Bearer ${managementKey}`,
+        },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(API_TIMEOUT_MS),
+    });
+    if (!response.ok)
+        throw new Error(`api-call ${response.status}`);
+    const raw = await response.json().catch(() => null);
+    const body = isJsonRecord(raw) || isString(raw) || isNumber(raw) || isBoolean(raw) || raw === null || Array.isArray(raw)
+        ? raw
+        : {};
+    const root = isJsonRecord(body) ? body : null;
+    const statusCode = compactNumber(firstScalar(root, ['status_code', 'statusCode']), 0) ?? 0;
+    const parsed = parseBody(firstScalar(root, ['body']));
+    if (statusCode < 200 || statusCode >= 300) {
+        const error = firstScalar(parsed, ['error']);
+        const detail = firstScalar(isJsonRecord(error) ? error : null, ['message']);
+        throw new Error(isNonEmptyString(detail) ? detail : `upstream HTTP ${statusCode}`);
+    }
+    return parsed;
+}
+const WHAM_HEADERS = {
+    authorization: 'Bearer $TOKEN$',
+    'content-type': 'application/json',
+    'user-agent': 'codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal',
+};
+function googleHeaders(metadata = {}) {
+    const headers = {
+        authorization: 'Bearer $TOKEN$',
+        'content-type': 'application/json',
+        'user-agent': 'google-api-nodejs-client/9.15.1',
+        'x-goog-api-client': 'google-cloud-sdk vscode_cloudshelleditor/0.1',
+    };
+    return Object.keys(metadata).length > 0
+        ? { ...headers, 'client-metadata': JSON.stringify(metadata) }
+        : headers;
+}
+async function queryCodex(baseURL, managementKey, account, now) {
+    if (account.accountId === '') {
+        return normalizeQuotaReport('codex', account.label, account.authIndex, account.planType, null, now);
+    }
+    const payload = await apiCall(baseURL, managementKey, {
+        auth_index: account.authIndex,
+        method: 'GET',
+        url: WHAM_USAGE_URL,
+        header: { ...WHAM_HEADERS, 'chatgpt-account-id': account.accountId },
+        data: '',
+    });
+    return normalizeQuotaReport('codex', account.label, account.authIndex, account.planType, payload, now);
+}
+async function loadCodeAssist(baseURL, managementKey, authIndex, metadata, projectID = '') {
+    const body = { metadata };
+    if (projectID !== '')
+        body.cloudaicompanionProject = projectID;
+    return apiCall(baseURL, managementKey, {
+        auth_index: authIndex,
+        method: 'POST',
+        url: LOAD_CODE_ASSIST_URL,
+        header: googleHeaders(metadata),
+        data: JSON.stringify(body),
+    });
+}
+async function queryGemini(baseURL, managementKey, account, now) {
+    const metadata = {
+        ideType: 'IDE_UNSPECIFIED',
+        platform: 'PLATFORM_UNSPECIFIED',
+        pluginType: 'GEMINI',
+    };
+    let project = account.projectId;
+    if (project === '') {
+        const loaded = await loadCodeAssist(baseURL, managementKey, account.authIndex, metadata);
+        project = stringOrEmpty(firstScalar(loaded, ['cloudaicompanionProject'])
+            ?? firstScalar(firstRecord(loaded, ['cloudaicompanionProject']), ['id']));
+    }
+    if (project === '')
+        return normalizeQuotaReport('gemini-cli', account.label, account.authIndex, account.planType, null, now);
+    const payload = await apiCall(baseURL, managementKey, {
+        auth_index: account.authIndex,
+        method: 'POST',
+        url: RETRIEVE_USER_QUOTA_URL,
+        header: googleHeaders(metadata),
+        data: JSON.stringify({ project }),
+    });
+    return normalizeQuotaReport('gemini-cli', account.label, account.authIndex, account.planType, payload, now);
+}
+async function queryAntigravity(baseURL, managementKey, account, now) {
+    const metadata = {
+        ideType: 'ANTIGRAVITY',
+        platform: 'PLATFORM_UNSPECIFIED',
+        pluginType: 'GEMINI',
+    };
+    let project = account.projectId;
+    if (project === '') {
+        const loaded = await loadCodeAssist(baseURL, managementKey, account.authIndex, metadata);
+        project = stringOrEmpty(firstScalar(loaded, ['cloudaicompanionProject'])
+            ?? firstScalar(firstRecord(loaded, ['cloudaicompanionProject']), ['id']));
+    }
+    if (project === '')
+        return normalizeQuotaReport('antigravity', account.label, account.authIndex, account.planType, null, now);
+    const payload = await apiCall(baseURL, managementKey, {
+        auth_index: account.authIndex,
+        method: 'POST',
+        url: FETCH_AVAILABLE_MODELS_URL,
+        header: googleHeaders(metadata),
+        data: JSON.stringify({ project }),
+    });
+    return normalizeQuotaReport('antigravity', account.label, account.authIndex, account.planType, payload, now);
+}
+function quotaForProvider(provider) {
+    if (provider === 'codex')
+        return queryCodex;
+    if (provider === 'gemini-cli')
+        return queryGemini;
+    if (provider === 'antigravity')
+        return queryAntigravity;
+    return undefined;
+}
+function refreshedAtMs(report) {
+    const value = report.refreshedAt;
+    if (value === undefined)
+        return 0;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+export class CpaQuotaService {
+    options;
+    accounts = [];
+    accountsFetchedAt = 0;
+    accountsPromise;
+    quota = new Map();
+    inFlight = new Map();
+    constructor(options) {
+        this.options = options;
+    }
+    snapshot() {
+        return {
+            accounts: this.accounts.map(publicAccount),
+            quota: Object.fromEntries(this.quota),
+        };
+    }
+    async ensureAccounts(now = Date.now()) {
+        const ttl = optionValue(this.options.authFilesTtlMs) ?? 30_000;
+        if (now - this.accountsFetchedAt < ttl)
+            return this.accounts;
+        if (this.accountsPromise !== undefined)
+            return this.accountsPromise;
+        this.accountsPromise = this.refreshAccounts(now);
+        try {
+            return await this.accountsPromise;
+        }
+        finally {
+            this.accountsPromise = undefined;
+        }
+    }
+    async refreshAccounts(now = Date.now()) {
+        const baseURL = resolvedOption(this.options.baseURL);
+        const managementKey = resolvedOption(this.options.managementKey);
+        const [files, apiProviders] = await Promise.all([
+            fetchAuthFiles(baseURL, managementKey),
+            fetchApiProviders(baseURL, managementKey),
+        ]);
+        this.accounts = [...files, ...apiProviders];
+        this.accountsFetchedAt = now;
+        return this.accounts;
+    }
+    async refreshQuota(now = Date.now()) {
+        const accounts = await this.ensureAccounts(now);
+        const tasks = accounts.filter(account => quotaForProvider(account.provider) !== undefined);
+        if (tasks.length === 0)
+            return this.quota;
+        const concurrency = optionValue(this.options.concurrency) ?? 4;
+        const queue = [...tasks];
+        const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+            while (queue.length > 0) {
+                const account = queue.shift();
+                if (account === undefined)
+                    continue;
+                await this.refreshOne(account, now);
+            }
+        });
+        await Promise.allSettled(workers);
+        return this.quota;
+    }
+    async refreshOne(account, now = Date.now()) {
+        const existing = this.quota.get(account.authIndex);
+        const refreshedAt = existing === undefined ? 0 : refreshedAtMs(existing);
+        const ttl = optionValue(this.options.quotaTtlMs) ?? 60_000;
+        if (existing !== undefined && refreshedAt > 0 && now - refreshedAt < ttl) {
+            return existing;
+        }
+        const inflight = this.inFlight.get(account.authIndex);
+        if (inflight !== undefined)
+            return inflight;
+        const query = quotaForProvider(account.provider);
+        if (query === undefined)
+            return existing;
+        const baseURL = resolvedOption(this.options.baseURL);
+        const managementKey = resolvedOption(this.options.managementKey);
+        const task = (async () => {
+            try {
+                const report = await query(baseURL, managementKey, account, new Date(now));
+                this.quota.set(account.authIndex, report);
+                return report;
+            }
+            catch {
+                this.quota.set(account.authIndex, normalizeQuotaReport(account.provider, account.label, account.authIndex, account.planType, null, new Date(now)));
+                return this.quota.get(account.authIndex);
+            }
+            finally {
+                this.inFlight.delete(account.authIndex);
+            }
+        })();
+        this.inFlight.set(account.authIndex, task);
+        return task;
+    }
+    async status() {
+        const now = Date.now();
+        try {
+            await this.ensureAccounts(now);
+        }
+        catch {
+            // Keep the last sanitized snapshot usable when management is temporarily offline.
+            return this.snapshot();
+        }
+        try {
+            await this.refreshQuota(now);
+        }
+        catch {
+            // Quota is best-effort; keep cached account data available.
+        }
+        return this.snapshot();
+    }
+}
