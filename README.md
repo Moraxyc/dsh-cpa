@@ -5,6 +5,11 @@
 CLI Proxy API（CPA）的 `dsh` bundle 插件。注册 `cpa` provider，请求走
 CPA 的 `/v1/chat/completions`，同步 `/v1/models` 模型列表。
 
+## 运行要求
+
+`dsh` 需要 `0.1.x` 线上 `0.1.5-rc.2` 及以上版本，包含 `0.1.6-alpha.1`。
+Web 服务重启后，管理路由依然可用。
+
 ## 快速开始
 
 ```sh

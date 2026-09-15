@@ -6,6 +6,11 @@ A `dsh` bundle plugin for CLI Proxy API (CPA). It registers the `cpa`
 provider, sends requests to `/v1/chat/completions`, and syncs models from
 `/v1/models`.
 
+## Requirements
+
+`dsh` `0.1.5-rc.2` or later on the `0.1.x` line, including `0.1.6-alpha.1`.
+Management routes stay available after a Web service restart.
+
 ## Quickstart
 
 ```sh

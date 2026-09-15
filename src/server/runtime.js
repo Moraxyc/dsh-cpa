@@ -3,7 +3,7 @@ import { assertCpaBinary, DEFAULT_AUTH_FILES_TTL_MS, DEFAULT_DAILY_REQUEST_LIMIT
 import { isBoolean, isError, isNumber, isString } from '../core/json.js';
 import { aggregateCpaUsage, CpaExecutionStore, sanitizeExecutionRecord, simpleProjectionSchema, } from '../core/services.js';
 import { CpaDataService } from './data.js';
-import { installManagementPanelWhenReady } from './management.js';
+import { installManagementPanel } from './management.js';
 import { CpaQuotaService } from './quota.js';
 import { planCpaRoute } from '../core/router.js';
 function internalBaseURL(options, port = options.port) {
@@ -409,7 +409,7 @@ export class CpaController {
             this.lastError = errorMessage(error);
             this.ctx.logger?.warn?.(`dsh-cpa: initial start failed: ${this.lastError}`);
         }
-        this.disposePanel = installManagementPanelWhenReady(this.ctx, {
+        this.disposePanel = installManagementPanel(this.ctx, {
             baseURL: () => this.currentBaseURL(),
             managementKey: () => this.managementKey ?? '',
             getState: () => this.getState(),
@@ -426,7 +426,7 @@ export class CpaController {
     }
     async dispose() {
         this.stopTimer();
-        this.disposePanel?.();
+        await this.disposePanel?.();
         const disposeProjection = this.disposeProjection;
         this.disposeProjection = undefined;
         await disposeProjection?.();

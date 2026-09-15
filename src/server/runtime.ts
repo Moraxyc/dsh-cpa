@@ -43,8 +43,14 @@ import type {
   ProjectionSchema,
 } from '../core/services.js'
 import { CpaDataService } from './data.js'
-import { installManagementPanelWhenReady } from './management.js'
-import type { CpaControllerState, CpaDiagnosticCheck, CpaDiagnostics, CpaReport } from './management.js'
+import { installManagementPanel } from './management.js'
+import type {
+  CpaControllerState,
+  CpaDiagnosticCheck,
+  CpaDiagnostics,
+  CpaReport,
+  ManagementWebScope,
+} from './management.js'
 import { CpaQuotaService } from './quota.js'
 import type { CpaAccountPublic } from './quota.js'
 import { planCpaRoute } from '../core/router.js'
@@ -58,7 +64,7 @@ export interface CpaRuntimeContext {
   }
   inject?: (
     deps: readonly string[],
-    factory: (ctx: SessionProjectionContext) => void,
+    factory: (ctx: CpaInjectedScope) => void,
   ) => { dispose(): void } | undefined
   llm: {
     registerAdapter(providers: readonly string[], adapter: LlmAdapter): () => void
@@ -67,6 +73,9 @@ export interface CpaRuntimeContext {
 }
 
 type Disposer = () => void | Promise<void>
+
+/** Services an injected scope carries; each injection site reads its own subset. */
+interface CpaInjectedScope extends SessionProjectionContext, ManagementWebScope {}
 
 interface SessionProjectionContext {
   sessionProjections: {
@@ -265,7 +274,7 @@ export class CpaController {
   private managementKey: string | undefined
   private lastError = ''
   private timer: ReturnType<typeof setInterval> | undefined
-  private disposePanel: (() => void) | undefined
+  private disposePanel: Disposer | undefined
   private queue: Promise<void> = Promise.resolve()
   private readonly adapter: CpaAdapter
   private executionStore: CpaExecutionStore
@@ -501,7 +510,7 @@ export class CpaController {
       this.lastError = errorMessage(error)
       this.ctx.logger?.warn?.(`dsh-cpa: initial start failed: ${this.lastError}`)
     }
-    this.disposePanel = installManagementPanelWhenReady(this.ctx, {
+    this.disposePanel = installManagementPanel(this.ctx, {
       baseURL: () => this.currentBaseURL(),
       managementKey: () => this.managementKey ?? '',
       getState: () => this.getState(),
@@ -519,7 +528,7 @@ export class CpaController {
 
   async dispose(): Promise<void> {
     this.stopTimer()
-    this.disposePanel?.()
+    await this.disposePanel?.()
     const disposeProjection = this.disposeProjection
     this.disposeProjection = undefined
     await disposeProjection?.()

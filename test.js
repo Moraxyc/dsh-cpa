@@ -28,7 +28,7 @@ import {
   cpaRoot,
   DIAGNOSTICS_PATH,
   EXECUTION_STATUS_PATH,
-  installManagementPanelWhenReady,
+  installManagementPanel,
   managementCookieValue,
   PANEL_PATH,
   PREFLIGHT_PATH,
@@ -555,6 +555,31 @@ test('resolveCpaBinary checks PATH before spawning', { skip: process.platform ==
   }
 })
 
+/**
+ * In-memory stand-in for the cordis injection seam: record the requested
+ * deps, run the callback with a scoped `effect`, and dispose the collected
+ * effect disposers the way a fiber unload does.
+ */
+function injectedWebContext(server) {
+  return {
+    inject(deps, callback) {
+      const effects = []
+      callback({
+        webServer: server,
+        effect(task) {
+          effects.push(task())
+        },
+      })
+      return {
+        dispose() {
+          for (const release of effects.splice(0).reverse()) release?.()
+        },
+      }
+    },
+    logger: { warn() {} },
+  }
+}
+
 test('management panel registers status and proxy routes', () => {
   const routes = []
   const server = {
@@ -566,14 +591,9 @@ test('management panel registers status and proxy routes', () => {
       }
     },
   }
-  const ctx = {
-    get(key) {
-      return key === 'webServer' ? server : undefined
-    },
-    logger: { warn() {} },
-  }
+  const ctx = injectedWebContext(server)
 
-  const dispose = installManagementPanelWhenReady(ctx, {
+  const dispose = installManagementPanel(ctx, {
     baseURL: 'http://127.0.0.1:8317/v1',
     managementKey: 'mgmt-test',
   })
@@ -594,6 +614,72 @@ test('management panel registers status and proxy routes', () => {
   assert.deepEqual(routes, [])
 })
 
+test('management panel binds its routes to each web carrier scope', async () => {
+  const carrier = () => {
+    const routes = []
+    return {
+      routes,
+      server: {
+        register(route) {
+          routes.push(route)
+          return () => {
+            const at = routes.indexOf(route)
+            if (at !== -1) routes.splice(at, 1)
+          }
+        },
+      },
+    }
+  }
+  const injections = []
+  const disposed = []
+  const ctx = {
+    inject(deps, callback) {
+      const scope = { deps: [...deps], callback }
+      injections.push(scope)
+      return {
+        dispose() {
+          disposed.push(scope)
+        },
+      }
+    },
+    logger: { warn() {} },
+  }
+
+  const release = installManagementPanel(ctx, {
+    baseURL: 'http://127.0.0.1:8317/v1',
+    managementKey: 'mgmt-test',
+  })
+  assert.deepEqual(injections.map(scope => scope.deps), [['webServer']])
+
+  // Every carrier the scope is installed for owns its own routes, and the
+  // routes leave with the scope instead of the first server that registered them.
+  const effects = []
+  const install = server => injections[0].callback({
+    webServer: server,
+    effect(task) {
+      effects.push(task())
+    },
+  })
+  const unload = () => {
+    for (const dispose of effects.splice(0).reverse()) dispose?.()
+  }
+
+  const first = carrier()
+  install(first.server)
+  assert.equal(first.routes.length, 8)
+  unload()
+  assert.deepEqual(first.routes, [])
+
+  const second = carrier()
+  install(second.server)
+  assert.equal(second.routes.length, 8)
+  unload()
+  assert.deepEqual(second.routes, [])
+
+  await release()
+  assert.deepEqual(disposed, [injections[0]])
+})
+
 test('summary route returns a safe shape without a management key', async () => {
   const routes = []
   let summaryCalls = 0
@@ -606,13 +692,8 @@ test('summary route returns a safe shape without a management key', async () => 
       }
     },
   }
-  const ctx = {
-    get(key) {
-      return key === 'webServer' ? server : undefined
-    },
-    logger: { warn() {} },
-  }
-  installManagementPanelWhenReady(ctx, {
+  const ctx = injectedWebContext(server)
+  installManagementPanel(ctx, {
     baseURL: () => 'http://127.0.0.1:8317/v1',
     managementKey: () => '',
     dataService: {
@@ -654,12 +735,7 @@ test('diagnostics route returns sanitized CPA health data', async () => {
       return () => {}
     },
   }
-  const ctx = {
-    get(key) {
-      return key === 'webServer' ? server : undefined
-    },
-    logger: { warn() {} },
-  }
+  const ctx = injectedWebContext(server)
   const diagnostics = {
     available: true,
     status: 'warning',
@@ -671,7 +747,7 @@ test('diagnostics route returns sanitized CPA health data', async () => {
     modelAccounts: { 'gpt-5': ['auth-1'] },
     errors: [],
   }
-  installManagementPanelWhenReady(ctx, {
+  installManagementPanel(ctx, {
     baseURL: () => 'http://127.0.0.1:8317/v1',
     managementKey: () => 'mgmt-test',
     diagnostics: async () => diagnostics,
@@ -702,12 +778,7 @@ test('preflight route validates input and forwards only routing facts', async ()
       return () => {}
     },
   }
-  const ctx = {
-    get(key) {
-      return key === 'webServer' ? server : undefined
-    },
-    logger: { warn() {} },
-  }
+  const ctx = injectedWebContext(server)
   const calls = []
   const plan = {
     requestedModel: 'gpt-5',
@@ -722,7 +793,7 @@ test('preflight route validates input and forwards only routing facts', async ()
       issues: [],
     },
   }
-  installManagementPanelWhenReady(ctx, {
+  installManagementPanel(ctx, {
     baseURL: () => 'http://127.0.0.1:8317/v1',
     managementKey: () => 'mgmt-test',
     preflight: async input => {
@@ -785,12 +856,7 @@ test('report route returns the sanitized diagnostics artifact', async () => {
       return () => {}
     },
   }
-  const ctx = {
-    get(key) {
-      return key === 'webServer' ? server : undefined
-    },
-    logger: { warn() {} },
-  }
+  const ctx = injectedWebContext(server)
   const report = {
     generatedAt: '2026-01-01T00:00:00.000Z',
     diagnostics: {
@@ -814,7 +880,7 @@ test('report route returns the sanitized diagnostics artifact', async () => {
       traceId: 'trace-1',
     }],
   }
-  installManagementPanelWhenReady(ctx, {
+  installManagementPanel(ctx, {
     baseURL: () => 'http://127.0.0.1:8317/v1',
     managementKey: () => 'mgmt-test',
     report: async () => report,
@@ -855,15 +921,10 @@ test('management proxy blocks browser access to api-call', async () => {
       }
     },
   }
-  const ctx = {
-    get(key) {
-      return key === 'webServer' ? server : undefined
-    },
-    logger: { warn() {} },
-  }
+  const ctx = injectedWebContext(server)
   try {
     const { port } = upstream.address()
-    installManagementPanelWhenReady(ctx, {
+    installManagementPanel(ctx, {
       baseURL: () => `http://127.0.0.1:${port}/v1`,
       managementKey: () => 'mgmt-test',
     })
@@ -900,12 +961,7 @@ test('execution status route returns sanitized account, quota, and session execu
       }
     },
   }
-  const ctx = {
-    get(key) {
-      return key === 'webServer' ? server : undefined
-    },
-    logger: { warn() {} },
-  }
+  const ctx = injectedWebContext(server)
   const execution = {
     authIndex: 'auth-1',
     sessionId: 's1',
@@ -914,7 +970,7 @@ test('execution status route returns sanitized account, quota, and session execu
     outcome: 'success',
     traceId: 'trace-1',
   }
-  installManagementPanelWhenReady(ctx, {
+  installManagementPanel(ctx, {
     baseURL: () => 'http://127.0.0.1:8317/v1',
     managementKey: () => 'mgmt-test',
     quotaService: {
@@ -967,14 +1023,9 @@ test('settings route exposes state and forwards control updates', async () => {
       }
     },
   }
-  const ctx = {
-    get(key) {
-      return key === 'webServer' ? server : undefined
-    },
-    logger: { warn() {} },
-  }
+  const ctx = injectedWebContext(server)
   const calls = []
-  installManagementPanelWhenReady(ctx, {
+  installManagementPanel(ctx, {
     baseURL: () => 'http://127.0.0.1:8317/v1',
     managementKey: () => 'mgmt-test',
     getState: () => ({ mode: 'off' }),

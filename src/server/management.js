@@ -445,85 +445,38 @@ function panelHandler(options) {
         await proxyManagement(options, url, req, res);
     };
 }
-export function installManagementPanelWhenReady(ctx, options) {
-    const disposers = [];
-    let timer;
-    let installed = false;
-    const register = () => {
-        if (installed)
-            return;
-        const server = ctx.get('webServer');
-        if (server === undefined)
-            return;
-        installed = true;
-        disposers.push(server.register({
-            kind: 'exact',
-            path: STATUS_PATH,
-            handler: statusHandler(options),
-        }));
-        disposers.push(server.register({
-            kind: 'exact',
-            path: EXECUTION_STATUS_PATH,
-            handler: executionStatusHandler(options),
-        }));
-        disposers.push(server.register({
-            kind: 'exact',
-            path: SUMMARY_PATH,
-            handler: summaryHandler(options),
-        }));
-        disposers.push(server.register({
-            kind: 'exact',
-            path: DIAGNOSTICS_PATH,
-            handler: diagnosticsHandler(options),
-        }));
-        disposers.push(server.register({
-            kind: 'exact',
-            path: PREFLIGHT_PATH,
-            handler: preflightHandler(options),
-        }));
-        disposers.push(server.register({
-            kind: 'exact',
-            path: REPORT_PATH,
-            handler: reportHandler(options),
-        }));
-        disposers.push(server.register({
-            kind: 'exact',
-            path: SETTINGS_PATH,
-            handler: settingsHandler(options),
-        }));
-        disposers.push(server.register({
-            kind: 'prefix',
-            path: PANEL_PATH,
-            handler: panelHandler(options),
-        }));
-        if (timer !== undefined)
-            clearInterval(timer);
-    };
-    try {
-        register();
+function managementRoutes(options) {
+    return [
+        { kind: 'exact', path: STATUS_PATH, handler: statusHandler(options) },
+        { kind: 'exact', path: EXECUTION_STATUS_PATH, handler: executionStatusHandler(options) },
+        { kind: 'exact', path: SUMMARY_PATH, handler: summaryHandler(options) },
+        { kind: 'exact', path: DIAGNOSTICS_PATH, handler: diagnosticsHandler(options) },
+        { kind: 'exact', path: PREFLIGHT_PATH, handler: preflightHandler(options) },
+        { kind: 'exact', path: REPORT_PATH, handler: reportHandler(options) },
+        { kind: 'exact', path: SETTINGS_PATH, handler: settingsHandler(options) },
+        { kind: 'prefix', path: PANEL_PATH, handler: panelHandler(options) },
+    ];
+}
+/**
+ * Serve the management routes on the Web carrier that currently holds them.
+ * The injected fiber owns the routes: its callback runs when `webServer`
+ * arrives and again on every replacement, so the routes always belong to the
+ * server that is listening instead of a carrier instance captured once.
+ * @param ctx - context that owns the injected fiber.
+ * @param options - management panel dependencies.
+ * @returns disposer releasing the injected fiber, settling once the routes are gone.
+ */
+export function installManagementPanel(ctx, options) {
+    if (ctx.inject === undefined) {
+        ctx.logger?.warn?.('dsh-cpa: context has no service injection; management routes are not registered');
+        return async () => { };
     }
-    catch (error) {
-        ctx.logger?.warn?.(error instanceof Error ? error : String(error));
-    }
-    if (!installed) {
-        timer = setInterval(() => {
-            try {
-                register();
-            }
-            catch (error) {
-                ctx.logger?.warn?.(error instanceof Error ? error : String(error));
-                if (timer !== undefined)
-                    clearInterval(timer);
-            }
-        }, 250);
-        timer.unref?.();
-        disposers.push(() => {
-            if (timer !== undefined)
-                clearInterval(timer);
-        });
-    }
-    return () => {
-        for (const dispose of disposers.splice(0).reverse())
-            dispose?.();
+    const fiber = ctx.inject(['webServer'], scope => {
+        for (const route of managementRoutes(options)) {
+            scope.effect(() => scope.webServer.register(route), `dsh-cpa: ${route.path}`);
+        }
+    });
+    return async () => {
+        await fiber?.dispose();
     };
 }
