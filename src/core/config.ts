@@ -5,6 +5,8 @@ import { constants } from 'node:fs'
 import { access, chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join, sep } from 'node:path'
+import type { Volatile } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
 import { isError, isJsonRecord, isNonEmptyString, isNumber, isString } from './json.js'
 import type { JsonRecord, JsonValue } from './json.js'
 
@@ -83,6 +85,74 @@ export interface CpaSettingsInput {
   quotaTtlMs?: ConfigScalar
   quotaConcurrency?: ConfigScalar
 }
+
+/**
+ * Host configuration for the CPA plugin.
+ *
+ * Deployment wiring stays ordinary configuration. Values users may change in
+ * the web client's Plugins page are volatile fields, so the Host can validate
+ * and persist them through dsh's profile-backed configuration forms.
+ */
+export interface Config {
+  provider: string
+  apiKey?: string
+  apiKeyRef: string
+  url?: string
+  managementKey?: string
+  bin: string
+  host: string
+  startTimeoutMs: number
+  defaultContextWindow: number
+  defaultMaxTokens: number
+  mode: Volatile<CpaMode | undefined>
+  externalUrl: Volatile<string | undefined>
+  externalApiKey: Volatile<string | undefined>
+  externalManagementKey: Volatile<string | undefined>
+  internalBin: Volatile<string | undefined>
+  usageStatisticsEnabled: Volatile<boolean>
+  routingStrategy: Volatile<CpaRoutingStrategy>
+  dailyRequestLimit: Volatile<number>
+  refreshIntervalMs: Volatile<number>
+  port: Volatile<number>
+  configPath: Volatile<string | undefined>
+  settingsPath: Volatile<string | undefined>
+  executionsPath: Volatile<string | undefined>
+  authFilesTtlMs: Volatile<number>
+  quotaTtlMs: Volatile<number>
+  quotaConcurrency: Volatile<number>
+}
+
+/** Schema consumed by the Host loader and projected into dsh configuration forms. */
+export const Config = z.object({
+  provider: z.string().default('cpa'),
+  apiKey: z.string().role('secret'),
+  apiKeyRef: z.string().default('CPA_API_KEY'),
+  url: z.string(),
+  managementKey: z.string().role('secret'),
+  bin: z.string().default(DEFAULT_BIN),
+  host: z.string().default(DEFAULT_HOST),
+  startTimeoutMs: z.number().step(1).min(1).default(DEFAULT_START_TIMEOUT_MS),
+  defaultContextWindow: z.number().step(1).min(1).default(DEFAULT_CONTEXT_WINDOW),
+  defaultMaxTokens: z.number().step(1).min(1).default(DEFAULT_MAX_TOKENS),
+  mode: z.union(['internal', 'external', 'off']).volatile(),
+  externalUrl: z.string().volatile(),
+  externalApiKey: z.string().role('secret').volatile(),
+  externalManagementKey: z.string().role('secret').volatile(),
+  internalBin: z.string().volatile(),
+  usageStatisticsEnabled: z.boolean().default(true).volatile(),
+  routingStrategy: z.union(['balanced', 'quality', 'availability', 'quota'])
+    .default(DEFAULT_ROUTING_STRATEGY)
+    .volatile(),
+  dailyRequestLimit: z.number().step(1).min(0).default(DEFAULT_DAILY_REQUEST_LIMIT).volatile(),
+  refreshIntervalMs: z.number().step(1).min(1).default(DEFAULT_REFRESH_MS).volatile(),
+  port: z.number().step(1).min(1).default(DEFAULT_PORT).volatile(),
+  configPath: z.string().volatile(),
+  settingsPath: z.string().volatile(),
+  executionsPath: z.string().volatile(),
+  authFilesTtlMs: z.number().step(1).min(1).default(DEFAULT_AUTH_FILES_TTL_MS).volatile(),
+  quotaTtlMs: z.number().step(1).min(1).default(DEFAULT_QUOTA_TTL_MS).volatile(),
+  quotaConcurrency: z.number().step(1).min(1).default(DEFAULT_QUOTA_CONCURRENCY).volatile(),
+})
 
 export interface CpaOptionsInput {
   provider?: ConfigScalar
@@ -496,6 +566,61 @@ export async function stopChild(handle: ChildHandle | undefined): Promise<void> 
     await exited
   } finally {
     clearTimeout(killer)
+  }
+}
+
+function volatileValue<T extends string | number | boolean>(value: Volatile<T | undefined>, fallback: T): T {
+  // SAFETY: Config marks these Volatile values as scalar fields, so their snapshots preserve T.
+  return (value.get() as T | undefined) ?? fallback
+}
+
+/** Resolve the ordinary runtime options from the Host Config object. */
+export function resolveOptionsFromConfig(config: Config): CpaOptions {
+  return resolveOptions({
+    provider: config.provider,
+    apiKey: config.apiKey,
+    apiKeyRef: config.apiKeyRef,
+    url: config.url,
+    managementKey: config.managementKey,
+    bin: config.bin,
+    configPath: config.configPath.get(),
+    settingsPath: config.settingsPath.get(),
+    executionsPath: config.executionsPath.get(),
+    authFilesTtlMs: config.authFilesTtlMs.get(),
+    quotaTtlMs: config.quotaTtlMs.get(),
+    quotaConcurrency: config.quotaConcurrency.get(),
+    host: config.host,
+    port: config.port.get(),
+    refreshIntervalMs: config.refreshIntervalMs.get(),
+    startTimeoutMs: config.startTimeoutMs,
+    defaultContextWindow: config.defaultContextWindow,
+    defaultMaxTokens: config.defaultMaxTokens,
+  })
+}
+
+/**
+ * Read the user-editable part of Config with the same fallbacks used by the
+ * runtime. This keeps a profile reset equivalent to the old deployment
+ * defaults and gives volatile-update consumers a complete settings snapshot.
+ */
+export function resolveCpaSettingsFromConfig(config: Config, options: CpaOptions): CpaSettings {
+  return {
+    mode: volatileValue(config.mode, options.url ? 'external' : 'internal'),
+    externalUrl: volatileValue(config.externalUrl, options.url),
+    externalApiKey: volatileValue(config.externalApiKey, options.apiKey),
+    externalManagementKey: volatileValue(config.externalManagementKey, options.managementKey),
+    internalBin: volatileValue(config.internalBin, options.bin),
+    usageStatisticsEnabled: volatileValue(config.usageStatisticsEnabled, true),
+    routingStrategy: volatileValue(config.routingStrategy, DEFAULT_ROUTING_STRATEGY),
+    dailyRequestLimit: volatileValue(config.dailyRequestLimit, DEFAULT_DAILY_REQUEST_LIMIT),
+    refreshIntervalMs: volatileValue(config.refreshIntervalMs, options.refreshIntervalMs),
+    port: volatileValue(config.port, options.port),
+    configPath: volatileValue(config.configPath, options.configPath),
+    settingsPath: volatileValue(config.settingsPath, options.settingsPath),
+    executionsPath: volatileValue(config.executionsPath, options.executionsPath),
+    authFilesTtlMs: volatileValue(config.authFilesTtlMs, options.authFilesTtlMs),
+    quotaTtlMs: volatileValue(config.quotaTtlMs, options.quotaTtlMs),
+    quotaConcurrency: volatileValue(config.quotaConcurrency, options.quotaConcurrency),
   }
 }
 

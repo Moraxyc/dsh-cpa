@@ -9,10 +9,15 @@ window.__ModuleLoader__.load({
       IconChevronUpOutline14,
       IconSettingsOutline14,
       IconStopFill16,
-      Input,
       Modal,
       Pill,
+      SettingsForm,
+      SettingsFormModel,
+      SettingsSecretField,
+      SettingsValueField,
       StateDot,
+      settingsNumberField,
+      settingsTextField,
     } = require('@deepseek-ai/dsh-client-ui-primitives')
 
     const SETTINGS_URL = '/dsh-cpa/settings'
@@ -943,26 +948,101 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function CpaSettingsSection() {
-      const [state, setState] = useState(null)
-      const [mode, setMode] = useState('internal')
-      const [externalUrl, setExternalUrl] = useState('')
-      const [externalApiKey, setExternalApiKey] = useState('')
-      const [externalManagementKey, setExternalManagementKey] = useState('')
-      const [internalBin, setInternalBin] = useState('')
-      const [usageStatisticsEnabled, setUsageStatisticsEnabled] = useState(true)
-      const [routingStrategy, setRoutingStrategy] = useState('balanced')
-      const [dailyRequestLimit, setDailyRequestLimit] = useState('0')
-      const [refreshIntervalMs, setRefreshIntervalMs] = useState('300000')
-      const [port, setPort] = useState('8317')
-      const [configPath, setConfigPath] = useState('')
-      const [settingsPath, setSettingsPath] = useState('')
-      const [executionsPath, setExecutionsPath] = useState('')
-      const [authFilesTtlMs, setAuthFilesTtlMs] = useState('30000')
-      const [quotaTtlMs, setQuotaTtlMs] = useState('60000')
-      const [quotaConcurrency, setQuotaConcurrency] = useState('4')
-      const [error, setError] = useState('')
-      const [busy, setBusy] = useState(false)
+    function booleanField(field) {
+      return {
+        field,
+        format: value => typeof value === 'boolean' ? String(value) : '',
+        parse: text => {
+          const value = text.trim().toLowerCase()
+          if (value === '') return { kind: 'clear' }
+          if (value === 'true') return { kind: 'set', value: true }
+          if (value === 'false') return { kind: 'set', value: false }
+          return undefined
+        },
+      }
+    }
+
+    class CpaSettingsFormController {
+      constructor(scope, describe) {
+        this.scope = scope
+        this.describe = describe
+        this.form = new SettingsFormModel(scope, [
+          settingsTextField('mode'),
+          settingsTextField('externalUrl'),
+          settingsTextField('internalBin'),
+          booleanField('usageStatisticsEnabled'),
+          settingsTextField('routingStrategy'),
+          settingsNumberField('dailyRequestLimit'),
+          settingsNumberField('refreshIntervalMs'),
+          settingsNumberField('port'),
+          settingsTextField('configPath'),
+          settingsTextField('settingsPath'),
+          settingsTextField('executionsPath'),
+          settingsNumberField('authFilesTtlMs'),
+          settingsNumberField('quotaTtlMs'),
+          settingsNumberField('quotaConcurrency'),
+        ], [
+          { field: 'externalApiKey', write: value => this.writeSecret('externalApiKey', value) },
+          { field: 'externalManagementKey', write: value => this.writeSecret('externalManagementKey', value) },
+        ])
+        this.store = this.form.bind(() => this.projection())
+        this.unsubscribeDescribe = describe.subscribe(() => {
+          this.store.set(this.projection())
+        })
+      }
+
+      secretConfigured(field) {
+        const view = this.describe.getSnapshot().view
+        const namespace = view?.namespaces?.find(entry => entry.ns === 'dsh-cpa')
+        return Array.isArray(namespace?.secrets)
+          && namespace.secrets.some(secret => secret.set === true
+            && Array.isArray(secret.path)
+            && secret.path.length === 1
+            && secret.path[0] === field)
+      }
+
+      projection() {
+        return {
+          ...this.form.shell(),
+          mode: this.form.field('mode'),
+          externalUrl: this.form.field('externalUrl'),
+          externalApiKey: this.form.field('externalApiKey'),
+          externalApiKeyConfigured: this.secretConfigured('externalApiKey'),
+          externalManagementKey: this.form.field('externalManagementKey'),
+          externalManagementKeyConfigured: this.secretConfigured('externalManagementKey'),
+          internalBin: this.form.field('internalBin'),
+          usageStatisticsEnabled: this.form.field('usageStatisticsEnabled'),
+          routingStrategy: this.form.field('routingStrategy'),
+          dailyRequestLimit: this.form.field('dailyRequestLimit'),
+          refreshIntervalMs: this.form.field('refreshIntervalMs'),
+          port: this.form.field('port'),
+          configPath: this.form.field('configPath'),
+          settingsPath: this.form.field('settingsPath'),
+          executionsPath: this.form.field('executionsPath'),
+          authFilesTtlMs: this.form.field('authFilesTtlMs'),
+          quotaTtlMs: this.form.field('quotaTtlMs'),
+          quotaConcurrency: this.form.field('quotaConcurrency'),
+        }
+      }
+
+      inject() {
+        return { hooks: { cpaCard: this.store }, ...this.form.actions() }
+      }
+
+      async writeSecret(field, value) {
+        return await this.scope.mutate([{ op: 'set', path: [field], value }])
+      }
+
+      dispose() {
+        this.unsubscribeDescribe()
+        this.form.dispose()
+      }
+    }
+
+    function CpaPluginItem(props) {
+      const form = props.useCpaCard(snapshot => snapshot)
+      const [runtimeState, setRuntimeState] = useState(null)
+      const [runtimeError, setRuntimeError] = useState('')
       const [panelOpen, setPanelOpen] = useState(false)
 
       useEffect(() => {
@@ -976,48 +1056,34 @@ window.__ModuleLoader__.load({
             if (!response.ok) throw new Error('CPA 不可用')
             const body = await response.json().catch(() => null)
             if (!cancelled && body && typeof body.mode === 'string') {
-              setState(body)
-              setMode(body.mode === 'off' ? 'internal' : body.mode)
-              setExternalUrl(body.external?.url || '')
-              setInternalBin(body.bin || '')
-              setUsageStatisticsEnabled(body.usageStatisticsEnabled !== false)
-              setRoutingStrategy(body.routingStrategy || 'balanced')
-              setDailyRequestLimit(String(body.dailyRequestLimit ?? 0))
-              setRefreshIntervalMs(String(body.refreshIntervalMs ?? 300000))
-              setPort(String(body.port ?? 8317))
-              setConfigPath(body.configPath || '')
-              setSettingsPath(body.settingsPath || '')
-              setExecutionsPath(body.executionsPath || '')
-              setAuthFilesTtlMs(String(body.authFilesTtlMs ?? 30000))
-              setQuotaTtlMs(String(body.quotaTtlMs ?? 60000))
-              setQuotaConcurrency(String(body.quotaConcurrency ?? 4))
-              setError(body.error || '')
+              setRuntimeState(body)
+              setRuntimeError('')
             }
-          } catch {
-            if (!cancelled) setError('CPA 不可用')
+          } catch (error) {
+            if (!cancelled) setRuntimeError(error instanceof Error ? error.message : 'CPA 不可用')
           }
         }
         void load()
         return () => { cancelled = true }
-      }, [])
+      }, [form.saving])
 
-      if (state === null) {
-        return React.createElement('div', {
-          style: { padding: '20px', color: 'var(--dsw-alias-label-tertiary)' },
-        }, error || 'CPA')
+      if (props.view === 'summary') {
+        return '配置 CPA 运行方式、路由策略和缓存参数。'
       }
 
+      const disabled = !form.writable || form.saving
+      const mode = form.mode.text || runtimeState?.mode || 'internal'
+      const statusText = runtimeState?.internalRunning
+        ? '内部 CPA 运行中'
+        : runtimeState?.externalRunning
+          ? '外部 CPA 运行中'
+          : 'CPA 已停止'
+      const statusState = runtimeState?.active ? 'done' : 'warning'
       const rowStyle = {
         display: 'flex',
         gap: '8px',
         alignItems: 'center',
         flexWrap: 'wrap',
-      }
-      const labelStyle = {
-        display: 'block',
-        marginBottom: '6px',
-        fontSize: '13px',
-        color: 'var(--dsw-alias-label-secondary)',
       }
       const fieldStyle = {
         display: 'flex',
@@ -1035,38 +1101,24 @@ window.__ModuleLoader__.load({
         background: 'var(--dsw-alias-bg-layer-1)',
         color: 'var(--dsw-alias-label-primary)',
       }
-      function textField(label, value, onChange, placeholder = '') {
-        return React.createElement('div', { style: fieldStyle },
-          React.createElement('label', { style: labelStyle }, label),
-          React.createElement(Input, {
-            type: 'text',
-            value,
-            onChange,
-            disabled: busy,
-            placeholder,
-            spellCheck: false,
-          }),
-        )
-      }
-      function numberField(label, value, onChange, min = '1') {
-        return React.createElement('div', { style: fieldStyle },
-          React.createElement('label', { style: labelStyle }, label),
-          React.createElement(Input, {
-            type: 'number',
-            min,
-            step: '1',
-            value,
-            onChange,
-            disabled: busy,
-          }),
-        )
-      }
-      const statusText = state.internalRunning
-        ? '内部 CPA 运行中'
-        : state.externalRunning
-          ? '外部 CPA 运行中'
-          : 'CPA 已停止'
-      const statusState = state.active ? 'done' : 'warning'
+      const edit = (field, text) => { props.edit(field, text) }
+      const field = (name, label, hint, numeric = false, placeholder = '') => React.createElement(SettingsValueField, {
+        id: 'dsh-cpa-' + name,
+        label,
+        hint,
+        overriddenLabel: '已覆盖',
+        resetLabel: '恢复默认',
+        invalidLabel: '请输入有效值',
+        numeric,
+        placeholder,
+        disabled,
+        ...form[name],
+        onEdit: text => edit(name, text),
+        onReset: () => props.resetField(name),
+      })
+      const usageText = form.usageStatisticsEnabled.text
+      const usageChecked = usageText === 'true'
+        || (usageText === '' && runtimeState?.usageStatisticsEnabled !== false)
 
       return React.createElement('div', { style: { padding: '20px' } },
         React.createElement('div', {
@@ -1088,165 +1140,159 @@ window.__ModuleLoader__.load({
             React.createElement(StateDot, { state: statusState }),
             statusText,
           ),
-          state.managementAvailable ? React.createElement(Button, {
-            variant: 'outline',
-            size: 'sm',
-            icon: React.createElement(IconSettingsOutline14),
-            onClick: () => setPanelOpen(true),
-          }, '管理面板') : null,
+          React.createElement('div', { style: rowStyle },
+            runtimeState?.managementAvailable ? React.createElement(Button, {
+              variant: 'outline',
+              size: 'sm',
+              icon: React.createElement(IconSettingsOutline14),
+              onClick: () => setPanelOpen(true),
+            }, '管理面板') : null,
+            runtimeState?.internalRunning ? React.createElement(Button, {
+              variant: 'outline',
+              size: 'sm',
+              icon: React.createElement(IconStopFill16),
+              onClick: () => {
+                edit('mode', 'off')
+                props.save()
+              },
+              disabled,
+            }, '停止') : null,
+          ),
         ),
         React.createElement(CpaDataSummary, {
-          active: state.active,
-          managementAvailable: state.managementAvailable,
+          active: runtimeState?.active === true,
+          managementAvailable: runtimeState?.managementAvailable === true,
         }),
         React.createElement(CpaDiagnostics, {
-          active: state.active,
-          managementAvailable: state.managementAvailable,
+          active: runtimeState?.active === true,
+          managementAvailable: runtimeState?.managementAvailable === true,
         }),
-        React.createElement('div', { style: rowStyle },
-          React.createElement(Pill, {
-            active: mode === 'internal',
-            'aria-pressed': mode === 'internal',
-            onClick: () => setMode('internal'),
-            disabled: busy,
-          }, '内部 CPA'),
-          React.createElement(Pill, {
-            active: mode === 'external',
-            'aria-pressed': mode === 'external',
-            onClick: () => setMode('external'),
-            disabled: busy,
-          }, '外部 CPA'),
-        ),
-        mode === 'internal' ? React.createElement('div', {
-          style: { ...rowStyle, alignItems: 'flex-start', marginTop: '12px' },
-        },
-          React.createElement('div', { style: fieldStyle },
-            React.createElement('label', { style: labelStyle }, 'CPA 路径'),
-            React.createElement(Input, {
-              type: 'text',
-              value: internalBin,
-              onChange: event => setInternalBin(event.target.value),
-              disabled: busy,
-              placeholder: 'cli-proxy-api',
-              spellCheck: false,
-            }),
-          ),
-          React.createElement('div', { style: { ...rowStyle, gap: '8px' } },
-            React.createElement('input', {
-              type: 'checkbox',
-              id: 'cpa-usage-stats',
-              checked: usageStatisticsEnabled,
-              onChange: event => setUsageStatisticsEnabled(event.target.checked),
-              disabled: busy,
-            }),
-            React.createElement('label', {
-              htmlFor: 'cpa-usage-stats',
-              style: { ...labelStyle, marginBottom: 0 },
-            }, '使用统计'),
-          ),
-        ) : null,
-        mode === 'external' ? React.createElement('div', {
-          style: { ...rowStyle, alignItems: 'flex-start', marginTop: '12px' },
-        },
-          React.createElement('div', { style: fieldStyle },
-            React.createElement('label', { style: labelStyle }, 'URL'),
-            React.createElement(Input, {
-              type: 'text',
-              value: externalUrl,
-              onChange: event => setExternalUrl(event.target.value),
-              disabled: busy,
-              placeholder: 'https://127.0.0.1:8317/v1',
-              spellCheck: false,
-            }),
-          ),
-          React.createElement('div', { style: fieldStyle },
-            React.createElement('label', { style: labelStyle }, 'API Key'),
-            React.createElement(Input, {
-              type: 'password',
-              value: externalApiKey,
-              onChange: event => setExternalApiKey(event.target.value),
-              disabled: busy,
-              placeholder: state.external?.apiKeySet ? '已保存' : 'API Key',
-            }),
-          ),
-          React.createElement('div', { style: fieldStyle },
-            React.createElement('label', { style: labelStyle }, '管理密钥'),
-            React.createElement(Input, {
-              type: 'password',
-              value: externalManagementKey,
-              onChange: event => setExternalManagementKey(event.target.value),
-              disabled: busy,
-              placeholder: state.external?.managementKeySet ? '已保存' : '管理密钥',
-            }),
-          ),
-        ) : null,
-        mode === 'internal' ? React.createElement('div', {
-          style: { ...rowStyle, alignItems: 'flex-start', marginTop: '16px' },
-        },
-          numberField('端口', port, event => setPort(event.target.value)),
-          textField('配置路径', configPath, event => setConfigPath(event.target.value), '默认 $DSH_HOME/cpa/config.yaml'),
-        ) : null,
-        React.createElement('div', {
-          style: {
-            ...rowStyle,
-            alignItems: 'flex-start',
-            marginTop: mode === 'internal' ? '8px' : '16px',
-            paddingTop: '12px',
-            borderTop: '1px solid var(--dsw-alias-border-l2)',
+        React.createElement(SettingsForm, {
+          labels: {
+            unavailable: 'CPA 配置暂不可用。',
+            readOnly: '当前部署的 profile 配置为只读。',
+            saveFailed: '保存失败，修改仍保留在当前表单中。',
+            save: '保存',
+            saving: '保存中…',
           },
+          state: form,
+          onSave: props.save,
+          onDiscard: props.discard,
         },
-          React.createElement('span', {
-            style: {
-              width: '100%',
-              fontWeight: '600',
-              color: 'var(--dsw-alias-label-primary)',
-            },
-          }, '高级设置'),
-          React.createElement('div', { style: fieldStyle },
-            React.createElement('label', { style: labelStyle }, '路由策略'),
-            React.createElement('select', {
-              value: routingStrategy,
-              onChange: event => setRoutingStrategy(event.target.value),
-              disabled: busy,
-              style: selectStyle,
-            },
-              React.createElement('option', { value: 'balanced' }, '平衡：健康度优先'),
-              React.createElement('option', { value: 'quality' }, '质量：健康度和优先级'),
-              React.createElement('option', { value: 'availability' }, '可用性：优先稳定账号'),
-              React.createElement('option', { value: 'quota' }, '额度：优先剩余额度'),
-            ),
+          React.createElement('div', { style: rowStyle },
+            React.createElement(Pill, {
+              active: mode === 'internal',
+              'aria-pressed': mode === 'internal',
+              onClick: () => edit('mode', 'internal'),
+              disabled,
+            }, '内部 CPA'),
+            React.createElement(Pill, {
+              active: mode === 'external',
+              'aria-pressed': mode === 'external',
+              onClick: () => edit('mode', 'external'),
+              disabled,
+            }, '外部 CPA'),
           ),
-          numberField('每日请求提醒（0=关闭）', dailyRequestLimit, event => setDailyRequestLimit(event.target.value), '0'),
-          numberField('模型刷新间隔 (ms)', refreshIntervalMs, event => setRefreshIntervalMs(event.target.value)),
-          numberField('auth-files 缓存 (ms)', authFilesTtlMs, event => setAuthFilesTtlMs(event.target.value)),
-          numberField('quota 缓存 (ms)', quotaTtlMs, event => setQuotaTtlMs(event.target.value)),
-          numberField('quota 并发', quotaConcurrency, event => setQuotaConcurrency(event.target.value)),
-          textField('设置路径', settingsPath, event => setSettingsPath(event.target.value), '默认 $DSH_HOME/cpa/settings.json'),
-          textField('执行记录路径', executionsPath, event => setExecutionsPath(event.target.value), '默认 $DSH_HOME/cpa/executions.json'),
+          mode === 'internal' ? React.createElement('div', {
+            style: { ...rowStyle, alignItems: 'flex-start', marginTop: '12px' },
+          },
+            React.createElement('div', { style: fieldStyle },
+              field('internalBin', 'CPA 路径', '留空使用部署默认的 cli-proxy-api。', false, 'cli-proxy-api'),
+              React.createElement('label', {
+                style: { display: 'inline-flex', gap: '8px', alignItems: 'center', marginTop: '8px' },
+              },
+                React.createElement('input', {
+                  type: 'checkbox',
+                  checked: usageChecked,
+                  onChange: event => edit('usageStatisticsEnabled', event.target.checked ? 'true' : 'false'),
+                  disabled,
+                }),
+                '使用统计',
+              ),
+            ),
+            React.createElement('div', { style: { ...rowStyle, flex: '1 1 280px' } },
+              field('port', '端口', '内部 CPA 使用的监听端口。', true, '8317'),
+              field('configPath', '配置路径', '留空使用默认 $DSH_HOME/cpa/config.yaml。', false, '$DSH_HOME/cpa/config.yaml'),
+            ),
+          ) : null,
+          mode === 'external' ? React.createElement('div', {
+            style: { ...rowStyle, alignItems: 'flex-start', marginTop: '12px' },
+          },
+            React.createElement('div', { style: fieldStyle },
+              field('externalUrl', 'URL', '外部 CPA 的 OpenAI-compatible base URL。', false, 'https://127.0.0.1:8317/v1'),
+            ),
+            React.createElement('div', { style: fieldStyle },
+              React.createElement(SettingsSecretField, {
+                id: 'dsh-cpa-external-api-key',
+                label: 'API Key',
+                hint: '密钥只写入 profile，不会在设置响应中返回。',
+                text: form.externalApiKey.text,
+                configured: form.externalApiKeyConfigured || runtimeState?.external?.apiKeySet === true,
+                stateLabel: form.externalApiKeyConfigured || runtimeState?.external?.apiKeySet === true ? '已配置' : '未配置',
+                disabled,
+                onEdit: text => edit('externalApiKey', text),
+              }),
+            ),
+            React.createElement('div', { style: fieldStyle },
+              React.createElement(SettingsSecretField, {
+                id: 'dsh-cpa-external-management-key',
+                label: '管理密钥',
+                hint: '用于读取 CPA 管理摘要和额度数据。',
+                text: form.externalManagementKey.text,
+                configured: form.externalManagementKeyConfigured || runtimeState?.external?.managementKeySet === true,
+                stateLabel: form.externalManagementKeyConfigured || runtimeState?.external?.managementKeySet === true ? '已配置' : '未配置',
+                disabled,
+                onEdit: text => edit('externalManagementKey', text),
+              }),
+            ),
+          ) : null,
+          React.createElement('div', {
+            style: {
+              ...rowStyle,
+              alignItems: 'flex-start',
+              marginTop: mode === 'internal' ? '16px' : '16px',
+              paddingTop: '12px',
+              borderTop: '1px solid var(--dsw-alias-border-l2)',
+            },
+          },
+            React.createElement('span', {
+              style: {
+                width: '100%',
+                fontWeight: '600',
+                color: 'var(--dsw-alias-label-primary)',
+              },
+            }, '高级设置'),
+            React.createElement('div', { style: fieldStyle },
+              React.createElement('label', { style: { display: 'block', marginBottom: '6px', fontSize: '13px', color: 'var(--dsw-alias-label-secondary)' } }, '路由策略'),
+              React.createElement('select', {
+                value: form.routingStrategy.text || 'balanced',
+                onChange: event => edit('routingStrategy', event.target.value),
+                disabled,
+                style: selectStyle,
+              },
+                React.createElement('option', { value: 'balanced' }, '平衡：健康度优先'),
+                React.createElement('option', { value: 'quality' }, '质量：健康度和优先级'),
+                React.createElement('option', { value: 'availability' }, '可用性：优先稳定账号'),
+                React.createElement('option', { value: 'quota' }, '额度：优先剩余额度'),
+              ),
+            ),
+            field('dailyRequestLimit', '每日请求提醒（0=关闭）', '软阈值，只在诊断中提示，不会阻断请求。', true, '0'),
+            field('refreshIntervalMs', '模型刷新间隔 (ms)', '定期重新读取 CPA 模型目录。', true, '300000'),
+            field('authFilesTtlMs', 'auth-files 缓存 (ms)', '认证文件读取缓存时长。', true, '30000'),
+            field('quotaTtlMs', 'quota 缓存 (ms)', 'quota 管理数据缓存时长。', true, '60000'),
+            field('quotaConcurrency', 'quota 并发', '同时读取的 quota 请求数。', true, '4'),
+            field('settingsPath', '旧设置路径', '仅用于兼容读取旧版 settings.json；profile 设置为主。', false, '$DSH_HOME/cpa/settings.json'),
+            field('executionsPath', '执行记录路径', '留空使用默认 $DSH_HOME/cpa/executions.json。', false, '$DSH_HOME/cpa/executions.json'),
+          ),
         ),
-        React.createElement('div', {
-          style: { ...rowStyle, marginTop: '16px' },
-        },
-          React.createElement(Button, {
-            variant: 'primary',
-            onClick: () => { void apply() },
-            disabled: busy,
-          }, busy ? '处理中' : mode === 'internal' ? '启动' : '应用'),
-          state.internalRunning ? React.createElement(Button, {
-            variant: 'outline',
-            icon: React.createElement(IconStopFill16),
-            onClick: () => { void apply({ mode: 'off' }) },
-            disabled: busy,
-          }, '停止') : null,
-        ),
-        error ? React.createElement('div', {
+        runtimeError || runtimeState?.error ? React.createElement('div', {
           role: 'alert',
           style: {
             marginTop: '12px',
             fontSize: '13px',
             color: 'var(--dsw-alias-state-error-primary)',
           },
-        }, error) : null,
+        }, runtimeError || runtimeState.error) : null,
         React.createElement(Modal, {
           open: panelOpen,
           onClose: () => setPanelOpen(false),
@@ -1261,63 +1307,6 @@ window.__ModuleLoader__.load({
           }),
         ),
       )
-
-      async function apply(patch) {
-        setBusy(true)
-        setError('')
-        const payload = patch || { mode }
-        if (mode === 'external') {
-          payload.externalUrl = externalUrl.trim()
-          if (externalApiKey) payload.externalApiKey = externalApiKey
-          if (externalManagementKey) payload.externalManagementKey = externalManagementKey
-        } else if (mode === 'internal') {
-          payload.internalBin = internalBin.trim()
-          payload.usageStatisticsEnabled = usageStatisticsEnabled
-        }
-        payload.refreshIntervalMs = Number(refreshIntervalMs)
-        payload.routingStrategy = routingStrategy
-        payload.dailyRequestLimit = Number(dailyRequestLimit)
-        if (mode === 'internal') {
-          payload.port = Number(port)
-          if (configPath.trim() !== '') payload.configPath = configPath.trim()
-        }
-        payload.authFilesTtlMs = Number(authFilesTtlMs)
-        payload.quotaTtlMs = Number(quotaTtlMs)
-        payload.quotaConcurrency = Number(quotaConcurrency)
-        if (settingsPath.trim() !== '') payload.settingsPath = settingsPath.trim()
-        if (executionsPath.trim() !== '') payload.executionsPath = executionsPath.trim()
-        try {
-          const response = await fetch(SETTINGS_URL, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', accept: 'application/json' },
-            body: JSON.stringify(payload),
-          })
-          const body = await response.json().catch(() => ({}))
-          if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`)
-          setState(body)
-          setMode(body.mode === 'off' ? 'internal' : body.mode)
-          setExternalUrl(body.external?.url || '')
-          setInternalBin(body.bin || '')
-          setUsageStatisticsEnabled(body.usageStatisticsEnabled !== false)
-          setRoutingStrategy(body.routingStrategy || 'balanced')
-          setDailyRequestLimit(String(body.dailyRequestLimit ?? dailyRequestLimit))
-          setRefreshIntervalMs(String(body.refreshIntervalMs ?? refreshIntervalMs))
-          setPort(String(body.port ?? port))
-          setConfigPath(body.configPath || configPath)
-          setSettingsPath(body.settingsPath || settingsPath)
-          setExecutionsPath(body.executionsPath || executionsPath)
-          setAuthFilesTtlMs(String(body.authFilesTtlMs ?? authFilesTtlMs))
-          setQuotaTtlMs(String(body.quotaTtlMs ?? quotaTtlMs))
-          setQuotaConcurrency(String(body.quotaConcurrency ?? quotaConcurrency))
-          setExternalApiKey('')
-          setExternalManagementKey('')
-          setError(body.error || '')
-        } catch (applyError) {
-          setError(applyError.message)
-        } finally {
-          setBusy(false)
-        }
-      }
     }
 
     function CpaDiagnostics({ active, managementAvailable }) {
@@ -1487,12 +1476,16 @@ window.__ModuleLoader__.load({
     }
 
     function apply(ctx) {
-      ctx.slots.inject('settings.section', () => ctx.slots.register({
-        name: 'settings.section',
+      const scope = ctx.configForms.get('dsh-cpa')
+      const form = new CpaSettingsFormController(scope, ctx.configForms.describe())
+      ctx.effect(() => async () => { await form.dispose() }, 'dsh-cpa: settings form')
+      ctx.effect(() => ctx.configForms.whileServed(['dsh-cpa'], () => ctx.slots.inject('plugins.item', () => ctx.slots.register({
+        name: 'plugins.item',
         id: 'cpa',
         order: 25,
         label: 'CPA',
-      }, CpaSettingsSection))
+        inject: () => form.inject(),
+      }, CpaPluginItem)), 'dsh-cpa: plugin settings page'))
       ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
         name: 'conversation.composer.dock',
         id: 'cpa',
@@ -1502,7 +1495,7 @@ window.__ModuleLoader__.load({
 
     return {
       name: 'dsh-cpa',
-      inject: ['slots'],
+      inject: ['slots', 'configForms'],
       apply,
     }
   },

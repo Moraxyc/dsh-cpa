@@ -7,8 +7,7 @@ CPA 的 `/v1/chat/completions`，同步 `/v1/models` 模型列表。
 
 ## 运行要求
 
-`dsh` 需要 `0.1.x` 线上 `0.1.5-rc.2` 及以上版本，包含 `0.1.6-alpha.1`。
-Web 服务重启后，管理路由依然可用。
+`dsh` 需要 `0.1.7-alpha.1` 或更高版本。Web 服务重启后，管理路由依然可用。
 
 ## 快速开始
 
@@ -61,10 +60,11 @@ management API 临时不可用时，插件会继续使用最近一次脱敏的�
 
 ## 设置面板
 
-CPA 页面使用 dsh web-app 组件，支持内部、外部两种启动方式，保存到
-`$DSH_HOME/cpa/settings.json`。只有内部 CPA 运行时显示停止操作。管理面板
-在弹窗中打开。外部模式可配置 `URL`、API key、management key；内部
-模式可配置 CPA 可执行文件路径。高级设置可配置端口、模型刷新间隔、
+CPA 页面位于 Plugins 的 `plugins.item` 插槽，使用 dsh 的 profile-backed
+Config/settings 表单。设置会保存到当前 active profile 的 `dsh-cpa` 配置中；旧版
+`$DSH_HOME/cpa/settings.json` 只用于首次迁移，以及兼容旧的管理 API。只有内部
+CPA 运行时显示停止操作。管理面板在弹窗中打开。外部模式可配置 `URL`、API key、
+management key；内部模式可配置 CPA 可执行文件路径。高级设置可配置端口、模型刷新间隔、
 quota 缓存与并发，以及配置、设置、执行记录路径。其中端口、配置路径和
 “使用统计”只对内部 CPA 生效；模型刷新间隔、quota 缓存/并发、设置路径和执行记录
 路径对两种模式都生效。

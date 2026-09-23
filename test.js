@@ -10,10 +10,12 @@ import {
   assertCpaBinary,
   buildManagedConfig,
   chatCompletionsUrl,
+  Config as CpaConfig,
   fetchModels,
   modelsUrl,
   normalizeModels,
   readCpaSettings,
+  resolveCpaSettingsFromConfig,
   resolveOptions,
   resolveCpaBinary,
   sanitizeCpaSettings,
@@ -22,7 +24,9 @@ import {
 import {
   CpaAdapter,
   parseCpaTraceId,
+  serializeMessages,
 } from './src/core/adapter.js'
+import { migrateLegacySettings } from './src/index.js'
 import { planCpaRoute, selectCpaModels } from './src/core/router.js'
 import {
   cpaRoot,
@@ -180,6 +184,150 @@ test('fetchModels requests the CPA rich model catalog', async () => {
   } finally {
     await new Promise(resolve => server.close(resolve))
   }
+})
+
+test('serializeMessages preserves developer and tool roles in the alpha.1 wire format', () => {
+  const wire = serializeMessages([
+    {
+      role: 'developer',
+      content: [{ type: 'text', text: 'runtime note' }],
+    },
+    {
+      role: 'tool',
+      toolCallId: 'call-1',
+      content: [{ type: 'text', text: 'tool output' }],
+    },
+  ])
+  assert.deepEqual(wire, [
+    { role: 'developer', content: 'runtime note' },
+    { role: 'tool', tool_call_id: 'call-1', content: 'tool output' },
+  ])
+})
+
+function volatile(value) {
+  return { get: () => value }
+}
+
+test('resolveCpaSettingsFromConfig reads volatile values and inherits deployment defaults', () => {
+  const options = resolveOptions({
+    url: 'http://deployment.example/v1',
+    apiKey: 'deployment-api-key',
+    managementKey: 'deployment-management-key',
+    bin: '/opt/cli-proxy-api',
+    configPath: '/opt/cpa/config.yaml',
+    port: 9000,
+    refreshIntervalMs: 120_000,
+  })
+  const settings = resolveCpaSettingsFromConfig({
+    mode: volatile('external'),
+    externalUrl: volatile('http://profile.example/v1'),
+    externalApiKey: volatile('profile-api-key'),
+    externalManagementKey: volatile(undefined),
+    internalBin: volatile(undefined),
+    usageStatisticsEnabled: volatile(false),
+    routingStrategy: volatile(undefined),
+    dailyRequestLimit: volatile(12),
+    refreshIntervalMs: volatile(undefined),
+    port: volatile(9100),
+    configPath: volatile(undefined),
+    settingsPath: volatile('/profile/settings.json'),
+    executionsPath: volatile(undefined),
+    authFilesTtlMs: volatile(undefined),
+    quotaTtlMs: volatile(15_000),
+    quotaConcurrency: volatile(undefined),
+  }, options)
+
+  assert.equal(settings.mode, 'external')
+  assert.equal(settings.externalUrl, 'http://profile.example/v1')
+  assert.equal(settings.externalApiKey, 'profile-api-key')
+  assert.equal(settings.externalManagementKey, 'deployment-management-key')
+  assert.equal(settings.internalBin, '/opt/cli-proxy-api')
+  assert.equal(settings.usageStatisticsEnabled, false)
+  assert.equal(settings.routingStrategy, 'balanced')
+  assert.equal(settings.dailyRequestLimit, 12)
+  assert.equal(settings.refreshIntervalMs, 120_000)
+  assert.equal(settings.port, 9100)
+  assert.equal(settings.configPath, '/opt/cpa/config.yaml')
+  assert.equal(settings.settingsPath, '/profile/settings.json')
+  assert.equal(settings.quotaTtlMs, 15_000)
+  assert.equal(settings.quotaConcurrency, 4)
+})
+
+test('Config schema keeps volatile form defaults in the resolved profile', () => {
+  const config = CpaConfig({})
+  assert.deepEqual({
+    usageStatisticsEnabled: config.usageStatisticsEnabled.get(),
+    ...Object.fromEntries([
+      'routingStrategy',
+      'dailyRequestLimit',
+      'refreshIntervalMs',
+      'port',
+      'authFilesTtlMs',
+      'quotaTtlMs',
+      'quotaConcurrency',
+    ].map(field => [field, config[field].get()])),
+  }, {
+    usageStatisticsEnabled: true,
+    routingStrategy: 'balanced',
+    dailyRequestLimit: 0,
+    refreshIntervalMs: 300_000,
+    port: 8317,
+    authFilesTtlMs: 30_000,
+    quotaTtlMs: 60_000,
+    quotaConcurrency: 4,
+  })
+})
+
+test('legacy settings migration leaves existing profile fields untouched', async () => {
+  const persisted = {
+    mode: 'internal',
+    externalUrl: 'http://legacy.example/v1',
+    externalApiKey: 'legacy-api-key',
+    externalManagementKey: 'legacy-management-key',
+    internalBin: '/legacy/cli-proxy-api',
+    usageStatisticsEnabled: false,
+    routingStrategy: 'quota',
+    dailyRequestLimit: 20,
+    refreshIntervalMs: 10_000,
+    port: 8318,
+    configPath: '/legacy/config.yaml',
+    settingsPath: '/legacy/settings.json',
+    executionsPath: '/legacy/executions.json',
+    authFilesTtlMs: 10_000,
+    quotaTtlMs: 20_000,
+    quotaConcurrency: 2,
+  }
+  const updates = []
+  const ctx = {
+    get(key) {
+      if (key !== 'settings') return undefined
+      return {
+        describe: () => [{
+          ns: 'dsh-cpa',
+          revision: 7,
+          user: { mode: 'external', port: 9000, quotaTtlMs: 1_000 },
+          secrets: [{ path: ['externalApiKey'], set: true }],
+        }],
+        update: async (ns, patch, revision) => {
+          updates.push({ ns, patch, revision })
+        },
+      }
+    },
+  }
+
+  const migrated = await migrateLegacySettings(ctx, persisted)
+
+  assert.equal(migrated.mode, undefined)
+  assert.equal(migrated.port, undefined)
+  assert.equal(migrated.quotaTtlMs, undefined)
+  assert.equal(migrated.externalApiKey, undefined)
+  assert.equal(migrated.externalUrl, 'http://legacy.example/v1')
+  assert.equal(migrated.routingStrategy, 'quota')
+  assert.deepEqual(updates, [{
+    ns: 'dsh-cpa',
+    patch: migrated,
+    revision: 7,
+  }])
 })
 
 test('CpaAdapter.resolveModel exposes branded reasoning metadata', async () => {

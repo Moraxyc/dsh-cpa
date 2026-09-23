@@ -58,6 +58,7 @@ import type { CpaRouteOptions, CpaRoutePlan } from '../core/router.js'
 
 export interface CpaRuntimeContext {
   get<T>(key: string): T | undefined
+  on?: (event: string, listener: (...args: never[]) => void) => () => void
   logger?: { warn?: (message: string | Error) => void }
   sessions?: {
     get(sessionId: string): { append(type: string, data: ExecutionRecord): void } | undefined
@@ -160,6 +161,8 @@ function diagnosticsStatus(
 export function resolveInitialCpaSettings(
   options: CpaOptions,
   persisted: CpaSettings | undefined,
+  configured?: Partial<CpaSettings>,
+  preferConfigured = false,
 ): CpaSettings {
   const initial: CpaSettings = {
     mode: options.url ? 'external' : 'internal',
@@ -179,7 +182,26 @@ export function resolveInitialCpaSettings(
     quotaTtlMs: options.quotaTtlMs ?? DEFAULT_QUOTA_TTL_MS,
     quotaConcurrency: options.quotaConcurrency ?? DEFAULT_QUOTA_CONCURRENCY,
   }
-  if (persisted === undefined) return initial
+  if (persisted === undefined && configured === undefined) return initial
+
+  if (preferConfigured && configured !== undefined) {
+    const settings = {
+      ...initial,
+      ...configured,
+    }
+    if (settings.mode === 'external' && !settings.externalUrl) {
+      settings.mode = options.url ? 'external' : 'internal'
+      settings.externalUrl = options.url || ''
+    }
+    return settings
+  }
+
+  if (persisted === undefined) {
+    return {
+      ...initial,
+      ...configured,
+    }
+  }
 
   const settings: CpaSettings = {
     mode: persisted.mode,
@@ -468,7 +490,7 @@ export class CpaController {
     return run
   }
 
-  update(patch: JsonRecord): Promise<CpaControllerState> {
+  update(patch: JsonRecord, persistLegacy = true): Promise<CpaControllerState> {
     return this.enqueue(async () => {
       const next = mergeCpaSettings(this.settings, patch)
       if (cpaSettingsEqual(next, this.settings) && this.active) return this.getState()
@@ -477,15 +499,17 @@ export class CpaController {
         await this.applySettings(next)
         this.settings = next
         this.lastError = ''
-        try {
-          const settingsPath = next.settingsPath || this.options.settingsPath
-          await writeCpaSettings(settingsPath, next)
-          if (settingsPath !== this.options.settingsPath) {
-            await writeCpaSettings(this.options.settingsPath, next)
+        if (persistLegacy) {
+          try {
+            const settingsPath = next.settingsPath || this.options.settingsPath
+            await writeCpaSettings(settingsPath, next)
+            if (settingsPath !== this.options.settingsPath) {
+              await writeCpaSettings(this.options.settingsPath, next)
+            }
+          } catch (error) {
+            this.lastError = `save failed: ${errorMessage(error)}`
+            this.ctx.logger?.warn?.(`dsh-cpa: failed to save settings: ${this.lastError}`)
           }
-        } catch (error) {
-          this.lastError = `save failed: ${errorMessage(error)}`
-          this.ctx.logger?.warn?.(`dsh-cpa: failed to save settings: ${this.lastError}`)
         }
         const executionsPath = next.executionsPath || this.options.executionsPath
         if (executionsPath !== this.executionStore.filePath) {

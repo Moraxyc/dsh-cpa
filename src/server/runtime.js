@@ -52,7 +52,7 @@ function diagnosticsStatus(active, checks) {
         return 'warning';
     return checks.every(check => check.status === 'pass') ? 'healthy' : 'warning';
 }
-export function resolveInitialCpaSettings(options, persisted) {
+export function resolveInitialCpaSettings(options, persisted, configured, preferConfigured = false) {
     const initial = {
         mode: options.url ? 'external' : 'internal',
         externalUrl: options.url || '',
@@ -71,8 +71,25 @@ export function resolveInitialCpaSettings(options, persisted) {
         quotaTtlMs: options.quotaTtlMs ?? DEFAULT_QUOTA_TTL_MS,
         quotaConcurrency: options.quotaConcurrency ?? DEFAULT_QUOTA_CONCURRENCY,
     };
-    if (persisted === undefined)
+    if (persisted === undefined && configured === undefined)
         return initial;
+    if (preferConfigured && configured !== undefined) {
+        const settings = {
+            ...initial,
+            ...configured,
+        };
+        if (settings.mode === 'external' && !settings.externalUrl) {
+            settings.mode = options.url ? 'external' : 'internal';
+            settings.externalUrl = options.url || '';
+        }
+        return settings;
+    }
+    if (persisted === undefined) {
+        return {
+            ...initial,
+            ...configured,
+        };
+    }
     const settings = {
         mode: persisted.mode,
         externalUrl: persisted.externalUrl || options.url || '',
@@ -363,7 +380,7 @@ export class CpaController {
         this.queue = run.then(() => undefined, () => undefined);
         return run;
     }
-    update(patch) {
+    update(patch, persistLegacy = true) {
         return this.enqueue(async () => {
             const next = mergeCpaSettings(this.settings, patch);
             if (cpaSettingsEqual(next, this.settings) && this.active)
@@ -374,16 +391,18 @@ export class CpaController {
                 await this.applySettings(next);
                 this.settings = next;
                 this.lastError = '';
-                try {
-                    const settingsPath = next.settingsPath || this.options.settingsPath;
-                    await writeCpaSettings(settingsPath, next);
-                    if (settingsPath !== this.options.settingsPath) {
-                        await writeCpaSettings(this.options.settingsPath, next);
+                if (persistLegacy) {
+                    try {
+                        const settingsPath = next.settingsPath || this.options.settingsPath;
+                        await writeCpaSettings(settingsPath, next);
+                        if (settingsPath !== this.options.settingsPath) {
+                            await writeCpaSettings(this.options.settingsPath, next);
+                        }
                     }
-                }
-                catch (error) {
-                    this.lastError = `save failed: ${errorMessage(error)}`;
-                    this.ctx.logger?.warn?.(`dsh-cpa: failed to save settings: ${this.lastError}`);
+                    catch (error) {
+                        this.lastError = `save failed: ${errorMessage(error)}`;
+                        this.ctx.logger?.warn?.(`dsh-cpa: failed to save settings: ${this.lastError}`);
+                    }
                 }
                 const executionsPath = next.executionsPath || this.options.executionsPath;
                 if (executionsPath !== this.executionStore.filePath) {

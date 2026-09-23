@@ -8,8 +8,8 @@ provider, sends requests to `/v1/chat/completions`, and syncs models from
 
 ## Requirements
 
-`dsh` `0.1.5-rc.2` or later on the `0.1.x` line, including `0.1.6-alpha.1`.
-Management routes stay available after a Web service restart.
+`dsh` `0.1.7-alpha.1` or later is required. Management routes stay available
+after a Web service restart.
 
 ## Quickstart
 
@@ -79,11 +79,13 @@ management.
 
 ## Settings Panel
 
-The CPA page uses dsh web-app components and supports internal and
-external startup modes, saved to `$DSH_HOME/cpa/settings.json`. Stop is only
-shown while the internal CPA is running. The management panel opens in a
-modal. External mode configures URL, API key, and management key;
-internal mode configures the CPA executable path. Advanced settings cover the
+The CPA page is exposed in the Plugins `plugins.item` slot and uses dsh's
+profile-backed Config/settings form. Settings are saved to the active profile's
+`dsh-cpa` configuration. The legacy `$DSH_HOME/cpa/settings.json` is used only
+for one-time migration and compatibility with the old management API. Stop is
+only shown while the internal CPA is running. The management panel opens in a
+modal. External mode configures URL, API key, and management key; internal mode
+configures the CPA executable path. Advanced settings cover the
 port, model refresh interval, quota cache/concurrency, and config, settings,
 and execution record paths. The port, config path, and usage statistics only
 apply to internal CPA; model refresh, quota cache/concurrency, settings path,

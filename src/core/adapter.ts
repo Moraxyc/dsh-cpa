@@ -22,10 +22,10 @@ import type {
   LlmReasoningEffortInfo,
   LlmResolvedModelInfo,
   Message,
+  RequestMessage,
   StreamChunk,
   TokenUsage,
   ToolCallBlock,
-  ToolResultBlock,
   ToolSchema,
 } from '@deepseek-ai/dsh-llm'
 import { chatCompletionsUrl } from './config.js'
@@ -264,7 +264,7 @@ function serializeAssistant(message: Message): WireMessage {
   return wire
 }
 
-export function serializeMessages(messages: readonly Message[]): WireMessage[] {
+export function serializeMessages(messages: readonly RequestMessage[]): WireMessage[] {
   const wire: WireMessage[] = []
   for (const message of messages) {
     assertTextOnly(message.content)
@@ -276,18 +276,19 @@ export function serializeMessages(messages: readonly Message[]): WireMessage[] {
       wire.push(serializeAssistant(message))
       continue
     }
-    const toolResults = message.content.filter((block): block is ToolResultBlock => block.type === 'tool-result')
-    const text = flattenText(message.content)
-    if (text.length > 0 || toolResults.length === 0) {
-      wire.push({ role: 'user', content: text })
-    }
-    for (const result of toolResults) {
+    if (message.role === 'tool') {
       wire.push({
         role: 'tool',
-        tool_call_id: result.toolCallId,
-        content: flattenText(result.content) || '(no output)',
+        tool_call_id: message.toolCallId,
+        content: flattenText(message.content) || '(no output)',
       })
+      continue
     }
+    if (message.role === 'developer') {
+      wire.push({ role: 'developer', content: flattenText(message.content) })
+      continue
+    }
+    wire.push({ role: message.role, content: flattenText(message.content) })
   }
   return wire
 }
