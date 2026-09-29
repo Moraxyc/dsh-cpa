@@ -3,12 +3,9 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require('react')
     const { useEffect, useState } = React
+    const primitives = require('@deepseek-ai/dsh-client-ui-primitives')
     const {
       Button,
-      IconChevronDownOutline14,
-      IconChevronUpOutline14,
-      IconSettingsOutline14,
-      IconStopFill16,
       Modal,
       Pill,
       SettingsForm,
@@ -18,7 +15,11 @@ window.__ModuleLoader__.load({
       StateDot,
       settingsNumberField,
       settingsTextField,
-    } = require('@deepseek-ai/dsh-client-ui-primitives')
+    } = primitives
+    const IconChevronDownOutline = primitives.IconChevronDownOutlineRegular || primitives.IconChevronDownOutline14
+    const IconChevronUpOutline = primitives.IconChevronUpOutlineRegular || primitives.IconChevronUpOutline14
+    const IconSettingsOutline = primitives.IconSettingsOutlineRegular || primitives.IconSettingsOutline14
+    const IconStopFill = primitives.IconStopFillRegular || primitives.IconStopFill16
 
     const SETTINGS_URL = '/dsh-cpa/settings'
     const SUMMARY_URL = '/dsh-cpa/summary'
@@ -782,7 +783,7 @@ window.__ModuleLoader__.load({
         },
           React.createElement('span', { className: 'dsh-cpa-readout-text' }, line),
           React.createElement('span', { className: 'dsh-cpa-readout-toggle', 'aria-hidden': true },
-            React.createElement(expanded ? IconChevronUpOutline14 : IconChevronDownOutline14, { size: 12 }),
+            React.createElement(expanded ? IconChevronUpOutline : IconChevronDownOutline, { size: 12 }),
           ),
         ),
         expanded && details.length > 0 ? React.createElement('div', { className: 'dsh-cpa-details' },
@@ -1144,13 +1145,13 @@ window.__ModuleLoader__.load({
             runtimeState?.managementAvailable ? React.createElement(Button, {
               variant: 'outline',
               size: 'sm',
-              icon: React.createElement(IconSettingsOutline14),
+              icon: React.createElement(IconSettingsOutline),
               onClick: () => setPanelOpen(true),
             }, '管理面板') : null,
             runtimeState?.internalRunning ? React.createElement(Button, {
               variant: 'outline',
               size: 'sm',
-              icon: React.createElement(IconStopFill16),
+              icon: React.createElement(IconStopFill),
               onClick: () => {
                 edit('mode', 'off')
                 props.save()

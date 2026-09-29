@@ -8,7 +8,7 @@ provider, sends requests to `/v1/chat/completions`, and syncs models from
 
 ## Requirements
 
-`dsh` `0.1.7-alpha.1` or later is required. Management routes stay available
+`dsh` `0.2.0-rc.2` or later is required. Management routes stay available
 after a Web service restart.
 
 ## Quickstart
