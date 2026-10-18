@@ -8,8 +8,13 @@ provider, sends requests to `/v1/chat/completions`, and syncs models from
 
 ## Requirements
 
-`dsh` `0.2.0-rc.2` or later is required. Management routes stay available
+`dsh` `0.2.1-rc.2` or later is required. Management routes stay available
 after a Web service restart.
+
+CPA management integration uses only the v8 management API
+(`/v8/management`) and no longer calls `/v0/management`. Managed configuration
+is written in the nested `config-version: 8` layout, and reads parse only v8
+fields.
 
 ## Quickstart
 
@@ -107,7 +112,8 @@ execution records to `$DSH_HOME/cpa/executions.json`, and exposes a `cpaUsage`
 projection for the current session. `/dsh-cpa/execution-status?sessionId=...`
 returns sanitized accounts, a quota snapshot, the latest execution record, and
 recent attempts for the current session. The browser cannot call CPA's
-`/v0/management/api-call`; it is only used by the server-side quota query. The
+`/v8/management/requests/api-call`; it is only used by the server-side quota
+query. The
 readout shows only CPA-specific state: the currently used provider/plan, failure
 or unavailable status, and one primary quota window, without repeating the token,
 latency, or performance stats already shown by dsh. Providers are read from both
@@ -119,8 +125,8 @@ trace/request details. The same session still keeps per-account request, failure
 and token totals for the `cpaUsage` projection, and the readout hides when no
 management API is available.
 
-The internal CPA `usage-statistics-enabled` setting is on by default and can be
-disabled in the CPA settings panel.
+The internal CPA `observability.usage.usage-statistics-enabled` setting is on by
+default and can be disabled in the CPA settings panel.
 
 ## CPA Summary
 
@@ -128,9 +134,11 @@ A read-only `/dsh-cpa/summary` endpoint is served by the plugin. The server
 uses the management key to call CPA's management API, and the browser only
 receives sanitized summary data, never the management key or credential fields.
 It includes version/update state, a whitelisted runtime config snapshot, usage
-request totals aggregated from `/v0/management/api-key-usage` and auth-file
-counters, sanitized accounts, and model-to-account availability from auth
-files. The CPA management API does not expose aggregate token totals, so those
+request totals aggregated from `/v8/management/observability/usage/api-keys`
+and `/v8/management/credentials` counters, sanitized accounts, and
+model-to-account availability from `/v8/management/credentials/models`. API-key
+providers are read from `/v8/management/config/api-keys` and merged with
+credentials by `auth_index`. The CPA management API does not expose aggregate token totals, so those
 values stay at zero. Data is cached briefly; a failed source is recorded as an
 error without hiding other data.
 

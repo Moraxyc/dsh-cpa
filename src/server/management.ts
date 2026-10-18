@@ -287,7 +287,8 @@ async function proxyManagement(
   }
 
   const targetPath = url.pathname.slice(PANEL_PATH.length)
-  if (targetPath === '/v0/management/api-call' || targetPath === '/v0/management/api-call/') {
+  const normalizedPath = targetPath.replace(/\/+$/, '')
+  if (normalizedPath === '/v0/management/api-call' || normalizedPath === '/v8/management/requests/api-call') {
     sendJson(res, 403, { error: 'forbidden' })
     return
   }

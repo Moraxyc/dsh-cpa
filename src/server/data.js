@@ -1,5 +1,5 @@
 import { isArray, asJsonRecord, isError, isJsonRecord, isNonEmptyString, isString } from '../core/json.js';
-import { fetchApiProviders, fetchAuthFiles, managementApi, managementApiWithHeaders, optionValue, publicAccount, resolvedOption, } from './quota.js';
+import { CPA_CONFIG_PATH, CPA_CREDENTIAL_MODELS_PATH, CPA_LATEST_VERSION_PATH, CPA_USAGE_API_KEYS_PATH, fetchApiProviders, fetchAuthFiles, managementApi, managementApiWithHeaders, mergeAccounts, optionValue, publicAccount, resolvedOption, } from './quota.js';
 const DEFAULT_DATA_TTL_MS = 30_000;
 const DEFAULT_MODEL_TTL_MS = 60_000;
 const DEFAULT_MODEL_CONCURRENCY = 4;
@@ -204,10 +204,20 @@ export function emptyConfig() {
     };
 }
 function configSource(payload) {
-    const record = asJsonRecord(payload);
-    if (record === null)
-        return null;
-    return isJsonRecord(record.config) ? record.config : record;
+    return asJsonRecord(payload);
+}
+function nestedRecord(source, path) {
+    let current = source ?? undefined;
+    for (const key of path) {
+        const record = asJsonRecord(current);
+        if (record === null)
+            return null;
+        current = record[key];
+    }
+    return asJsonRecord(current);
+}
+function nestedValue(source, path, key) {
+    return sourceValue(nestedRecord(source, path), [key]);
 }
 function sanitizeProxyUrl(value) {
     const text = safeString(value, 1000);
@@ -228,30 +238,18 @@ function sanitizeProxyUrl(value) {
 export function normalizeConfig(payload) {
     const source = configSource(payload);
     return {
-        routingStrategy: safeString(sourceValue(source, ['routing-strategy', 'routing_strategy', 'routingStrategy']), 100),
-        proxyUrl: sanitizeProxyUrl(sourceValue(source, ['proxy-url', 'proxy_url', 'proxyUrl'])),
-        requestRetry: integerNumber(sourceValue(source, ['request-retry', 'request_retry', 'requestRetry'])),
-        maxRetryInterval: integerNumber(sourceValue(source, ['max-retry-interval', 'max_retry_interval', 'maxRetryInterval'])),
-        debug: safeBoolean(sourceValue(source, ['debug'])),
-        requestLog: safeBoolean(sourceValue(source, ['request-log', 'request_log', 'requestLog'])),
-        loggingToFile: safeBoolean(sourceValue(source, ['logging-to-file', 'logging_to_file', 'loggingToFile'])),
-        usageStatisticsEnabled: safeBoolean(sourceValue(source, [
-            'usage-statistics-enabled',
-            'usage_statistics_enabled',
-            'usageStatisticsEnabled',
-        ])),
-        websocketAuth: safeBoolean(sourceValue(source, ['websocket-auth', 'websocket_auth', 'websocketAuth'])),
-        forceModelPrefix: safeBoolean(sourceValue(source, ['force-model-prefix', 'force_model_prefix', 'forceModelPrefix'])),
-        logsMaxTotalSizeMb: integerNumber(sourceValue(source, [
-            'logs-max-total-size-mb',
-            'logs_max_total_size_mb',
-            'logsMaxTotalSizeMb',
-        ])),
-        errorLogsMaxFiles: integerNumber(sourceValue(source, [
-            'error-logs-max-files',
-            'error_logs_max_files',
-            'errorLogsMaxFiles',
-        ])),
+        routingStrategy: safeString(nestedValue(source, ['routing'], 'strategy'), 100),
+        proxyUrl: sanitizeProxyUrl(nestedValue(source, ['requests'], 'proxy-url')),
+        requestRetry: integerNumber(nestedValue(source, ['routing', 'retry'], 'request-retry')),
+        maxRetryInterval: integerNumber(nestedValue(source, ['routing', 'retry'], 'max-retry-interval')),
+        debug: safeBoolean(nestedValue(source, ['observability', 'logs'], 'debug')),
+        requestLog: safeBoolean(nestedValue(source, ['observability', 'logs'], 'request-log')),
+        loggingToFile: safeBoolean(nestedValue(source, ['observability', 'logs'], 'logging-to-file')),
+        usageStatisticsEnabled: safeBoolean(nestedValue(source, ['observability', 'usage'], 'usage-statistics-enabled')),
+        websocketAuth: safeBoolean(nestedValue(source, ['oauth', 'providers', 'aistudio'], 'ws-auth')),
+        forceModelPrefix: safeBoolean(nestedValue(source, ['routing'], 'force-model-prefix')),
+        logsMaxTotalSizeMb: integerNumber(nestedValue(source, ['observability', 'logs'], 'logs-max-total-size-mb')),
+        errorLogsMaxFiles: integerNumber(nestedValue(source, ['observability', 'logs'], 'error-logs-max-files')),
     };
 }
 export function normalizeVersion(payload) {
@@ -373,25 +371,20 @@ export class CpaDataService {
     async loadUsage(now) {
         const baseURL = resolvedOption(this.options.baseURL);
         const managementKey = resolvedOption(this.options.managementKey);
-        const body = await managementApi(baseURL, managementKey, '/v0/management/api-key-usage');
+        const body = await managementApi(baseURL, managementKey, CPA_USAGE_API_KEYS_PATH);
         return normalizeUsage({ statistics: apiKeyUsageStatistics(body) }, now);
     }
     async loadConfig(_now) {
         const baseURL = resolvedOption(this.options.baseURL);
         const managementKey = resolvedOption(this.options.managementKey);
-        const { body, headers } = await managementApiWithHeaders(baseURL, managementKey, '/v0/management/config');
-        const headerVersion = safeString(headers.get('x-cpa-version') || headers.get('x-server-version') || headers.get('x-cpa-home-version'), 80);
-        return {
-            config: normalizeConfig(body),
-            version: safeString(sourceValue(configSource(body), ['version', 'current-version', 'current_version', 'currentVersion'])
-                ?? sourceValue(asJsonRecord(body), ['version', 'current-version', 'current_version', 'currentVersion'])
-                ?? headerVersion, 80),
-        };
+        const { body, headers } = await managementApiWithHeaders(baseURL, managementKey, CPA_CONFIG_PATH);
+        const version = safeString(headers.get('x-cpa-version') || headers.get('x-server-version') || headers.get('x-cpa-home-version'), 80);
+        return { config: normalizeConfig(body), version };
     }
     async loadLatestVersion() {
         const baseURL = resolvedOption(this.options.baseURL);
         const managementKey = resolvedOption(this.options.managementKey);
-        const body = await managementApi(baseURL, managementKey, '/v0/management/latest-version');
+        const body = await managementApi(baseURL, managementKey, CPA_LATEST_VERSION_PATH);
         return normalizeVersion(body);
     }
     async loadAccounts() {
@@ -401,24 +394,19 @@ export class CpaDataService {
             fetchAuthFiles(baseURL, managementKey),
             fetchApiProviders(baseURL, managementKey),
         ]);
-        const accounts = [];
         const errors = [];
-        if (filesResult.status === 'fulfilled') {
-            accounts.push(...filesResult.value.map(publicAccount));
+        const credentials = filesResult.status === 'fulfilled' ? filesResult.value : [];
+        if (filesResult.status === 'rejected') {
+            errors.push({ source: 'credentials', message: errorMessage(filesResult.reason) });
         }
-        else {
-            errors.push({ source: 'auth-files', message: errorMessage(filesResult.reason) });
-        }
-        if (providersResult.status === 'fulfilled') {
-            accounts.push(...providersResult.value);
-        }
-        else {
+        const providers = providersResult.status === 'fulfilled' ? providersResult.value : [];
+        if (providersResult.status === 'rejected') {
             errors.push({ source: 'api-providers', message: errorMessage(providersResult.reason) });
         }
-        if (accounts.length === 0 && errors.length > 0) {
+        if (filesResult.status === 'rejected' && providersResult.status === 'rejected') {
             throw new Error(errors.map(error => error.message).join('; '));
         }
-        return { accounts, errors };
+        return { accounts: mergeAccounts(credentials, providers).map(publicAccount), errors };
     }
     async refreshCore(now) {
         const [usageResult, configResult, versionResult, accountsResult] = await Promise.allSettled([
@@ -443,7 +431,7 @@ export class CpaDataService {
             try {
                 const baseURL = resolvedOption(this.options.baseURL);
                 const managementKey = resolvedOption(this.options.managementKey);
-                const body = await managementApi(baseURL, managementKey, `/v0/management/auth-files/models?name=${encodeURIComponent(name)}`);
+                const body = await managementApi(baseURL, managementKey, `${CPA_CREDENTIAL_MODELS_PATH}?name=${encodeURIComponent(name)}`);
                 const result = { fetchedAt: now, models: normalizeAuthFileModels(body), error: undefined };
                 this.modelCache.set(name, result);
                 return result;

@@ -665,11 +665,18 @@ test('buildManagedConfig writes a local CPA config', () => {
     apiKey: 'sk-test',
     managementKey: 'mgmt-test',
   })
-  assert.match(yaml, /^host: "127\.0\.0\.1"$/m)
-  assert.match(yaml, /^port: 8317$/m)
+  assert.match(yaml, /^config-version: 8$/m)
+  assert.match(yaml, /^server:$/m)
+  assert.match(yaml, /^  host: "127\.0\.0\.1"$/m)
+  assert.match(yaml, /^  port: 8317$/m)
+  assert.match(yaml, /^management:$/m)
   assert.match(yaml, /^  secret-key: "mgmt-test"$/m)
-  assert.match(yaml, /^  - "sk-test"$/m)
-  assert.match(yaml, /^usage-statistics-enabled: true$/m)
+  assert.match(yaml, /^access:$/m)
+  assert.match(yaml, /^  api-keys:$/m)
+  assert.match(yaml, /^    - "sk-test"$/m)
+  assert.match(yaml, /^observability:$/m)
+  assert.match(yaml, /^  usage:$/m)
+  assert.match(yaml, /^    usage-statistics-enabled: true$/m)
   const disabled = buildManagedConfig({
     host: '127.0.0.1',
     port: 8317,
@@ -677,7 +684,7 @@ test('buildManagedConfig writes a local CPA config', () => {
     managementKey: 'mgmt-test',
     usageStatisticsEnabled: false,
   })
-  assert.match(disabled, /^usage-statistics-enabled: false$/m)
+  assert.match(disabled, /^    usage-statistics-enabled: false$/m)
 })
 
 test('resolveCpaBinary checks PATH before spawning', { skip: process.platform === 'win32' }, async () => {
@@ -1077,21 +1084,23 @@ test('management proxy blocks browser access to api-call', async () => {
       managementKey: () => 'mgmt-test',
     })
     const route = routes.find(route => route.kind === 'prefix' && route.path === PANEL_PATH)
-    const req = Readable.from([])
-    req.method = 'POST'
-    req.url = `${PANEL_PATH}/v0/management/api-call`
-    req.headers = { cookie: `dsh_cpa_mgmt=${managementCookieValue('mgmt-test')}` }
-    const res = {
-      writeHead(status, headers) {
-        this.status = status
-        this.headers = headers
-      },
-      end(body) {
-        this.body = body
-      },
+    for (const path of ['/v0/management/api-call', '/v8/management/requests/api-call']) {
+      const req = Readable.from([])
+      req.method = 'POST'
+      req.url = `${PANEL_PATH}${path}`
+      req.headers = { cookie: `dsh_cpa_mgmt=${managementCookieValue('mgmt-test')}` }
+      const res = {
+        writeHead(status, headers) {
+          this.status = status
+          this.headers = headers
+        },
+        end(body) {
+          this.body = body
+        },
+      }
+      await route.handler(req, res)
+      assert.equal(res.status, 403)
     }
-    await route.handler(req, res)
-    assert.equal(res.status, 403)
     assert.equal(apiCalls, 0)
   } finally {
     await new Promise(resolve => upstream.close(resolve))
@@ -1510,7 +1519,7 @@ test('CpaDataService summary normalizes and caches sanitized management data', a
     const url = new URL(req.url, 'http://localhost')
     assert.equal(req.headers.authorization, 'Bearer mgmt-live')
     requestCounts.set(url.pathname, (requestCounts.get(url.pathname) || 0) + 1)
-    if (url.pathname === '/v0/management/api-key-usage') {
+    if (url.pathname === '/v8/management/observability/usage/api-keys') {
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({
         deepseek: {
@@ -1522,35 +1531,60 @@ test('CpaDataService summary normalizes and caches sanitized management data', a
       }))
       return
     }
-    if (url.pathname === '/v0/management/config') {
+    if (url.pathname === '/v8/management/config') {
       res.writeHead(200, {
         'content-type': 'application/json',
         'x-cpa-version': 'v0.1.2',
       })
       res.end(JSON.stringify({
-        'routing-strategy': 'round-robin',
-        'proxy-url': 'https://user:pass@proxy.example/path?token=abc',
-        'request-retry': 3,
-        'max-retry-interval': 60_000,
-        debug: true,
-        'request-log': false,
-        'logging-to-file': true,
-        'usage-statistics-enabled': true,
-        'websocket-auth': false,
-        'force-model-prefix': true,
-        'logs-max-total-size-mb': 512,
-        'error-logs-max-files': 7,
-        api_key: 'raw-secret',
-        secret_token: 'secret-token',
+        routing: {
+          strategy: 'round-robin',
+          'force-model-prefix': true,
+          retry: {
+            'request-retry': 3,
+            'max-retry-interval': 60_000,
+          },
+        },
+        requests: {
+          'proxy-url': 'https://user:pass@proxy.example/path?token=abc',
+        },
+        observability: {
+          logs: {
+            debug: true,
+            'request-log': false,
+            'logging-to-file': true,
+            'logs-max-total-size-mb': 512,
+            'error-logs-max-files': 7,
+          },
+          usage: {
+            'usage-statistics-enabled': true,
+          },
+        },
+        oauth: {
+          providers: {
+            aistudio: {
+              'ws-auth': false,
+            },
+          },
+        },
+        access: {
+          api_key: 'raw-secret',
+          secret_token: 'secret-token',
+        },
       }))
       return
     }
-    if (url.pathname === '/v0/management/latest-version') {
+    if (url.pathname === '/v8/management/config/api-keys') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end('{}')
+      return
+    }
+    if (url.pathname === '/v8/management/server/latest-version') {
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ 'latest-version': 'v0.1.3' }))
       return
     }
-    if (url.pathname === '/v0/management/auth-files') {
+    if (url.pathname === '/v8/management/credentials') {
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({
         files: [{
@@ -1568,7 +1602,7 @@ test('CpaDataService summary normalizes and caches sanitized management data', a
       }))
       return
     }
-    if (url.pathname === '/v0/management/auth-files/models') {
+    if (url.pathname === '/v8/management/credentials/models') {
       assert.equal(url.searchParams.get('name'), 'codex.json')
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({
@@ -1664,14 +1698,16 @@ test('CpaDataService summary normalizes and caches sanitized management data', a
       assert.equal(serialized.includes(secret), false)
     }
     for (const path of [
-      '/v0/management/api-key-usage',
-      '/v0/management/config',
-      '/v0/management/latest-version',
-      '/v0/management/auth-files',
-      '/v0/management/auth-files/models',
+      '/v8/management/observability/usage/api-keys',
+      '/v8/management/config',
+      '/v8/management/config/api-keys',
+      '/v8/management/server/latest-version',
+      '/v8/management/credentials',
+      '/v8/management/credentials/models',
     ]) {
       assert.equal(requestCounts.get(path), 1)
     }
+    assert.equal([...requestCounts.keys()].some(path => path.startsWith('/v0/management')), false)
   } finally {
     await new Promise(resolve => server.close(resolve))
   }
@@ -1724,11 +1760,13 @@ test('CpaQuotaService resolves live baseURL and management key', async () => {
     'signature',
   ].join('.')
   let apiCalls = 0
+  const requestedPaths = new Set()
   const server = createServer((req, res) => {
     req.resume()
     const url = new URL(req.url, 'http://localhost')
     assert.equal(req.headers.authorization, 'Bearer mgmt-live')
-    if (url.pathname === '/v0/management/auth-files') {
+    requestedPaths.add(url.pathname)
+    if (url.pathname === '/v8/management/credentials') {
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({
         files: [{
@@ -1741,7 +1779,7 @@ test('CpaQuotaService resolves live baseURL and management key', async () => {
       }))
       return
     }
-    if (url.pathname === '/v0/management/openai-compatibility') {
+    if (url.pathname === '/v8/management/config/api-keys') {
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({
         'openai-compatibility': [{
@@ -1751,9 +1789,9 @@ test('CpaQuotaService resolves live baseURL and management key', async () => {
           priority: 7,
           disabled: false,
           'disable-cooling': true,
-          'api-key-entries': [{
+          keys: [{
             'api-key': 'sk-secret',
-            'auth-index': 'api-1',
+            auth_index: 'api-1',
           }],
           models: [
             { name: 'deepseek-chat', alias: 'deepseek-chat' },
@@ -1763,7 +1801,7 @@ test('CpaQuotaService resolves live baseURL and management key', async () => {
       }))
       return
     }
-    if (url.pathname === '/v0/management/api-call') {
+    if (url.pathname === '/v8/management/requests/api-call') {
       apiCalls += 1
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({
@@ -1824,6 +1862,87 @@ test('CpaQuotaService resolves live baseURL and management key', async () => {
       disableCooling: true,
     })
     assert.equal('api-key' in apiProvider, false)
+    assert.equal([...requestedPaths].some(path => path.startsWith('/v0/management')), false)
+  } finally {
+    await new Promise(resolve => server.close(resolve))
+  }
+})
+
+test('CpaQuotaService merges credential runtime state with provider metadata by authIndex', async () => {
+  const server = createServer((req, res) => {
+    req.resume()
+    const url = new URL(req.url, 'http://localhost')
+    assert.equal(req.headers.authorization, 'Bearer mgmt-live')
+    if (url.pathname === '/v8/management/credentials') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({
+        files: [{
+          auth_index: 'shared-1',
+          provider: 'openai-compatible-deepseek',
+          label: 'DeepSeek API',
+          status: 'active',
+          source: 'memory',
+          runtime_only: true,
+          success: 9,
+          failed: 2,
+          recent_requests: [{ time: '10:00-10:10', success: 4, failed: 1 }],
+        }],
+      }))
+      return
+    }
+    if (url.pathname === '/v8/management/config/api-keys') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({
+        'openai-compatibility': [{
+          name: 'DeepSeek API',
+          'base-url': 'https://api.deepseek.com',
+          prefix: 'deep',
+          priority: 7,
+          'disable-cooling': true,
+          keys: [{
+            'api-key': 'sk-secret',
+            'auth-index': 'shared-1',
+          }],
+          models: [{ name: 'deepseek-chat', alias: 'deepseek-chat' }],
+        }],
+      }))
+      return
+    }
+    res.writeHead(404)
+    res.end()
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const { port } = server.address()
+    const service = new CpaQuotaService({
+      baseURL: `http://127.0.0.1:${port}/v1`,
+      managementKey: 'mgmt-live',
+      authFilesTtlMs: 60_000,
+    })
+    const accounts = await service.refreshAccounts()
+    assert.equal(accounts.length, 1)
+    assert.deepEqual(accounts[0], {
+      authIndex: 'shared-1',
+      label: 'DeepSeek API',
+      provider: 'deepseek',
+      status: 'active',
+      source: 'api-key',
+      disabled: false,
+      unavailable: false,
+      success: 9,
+      failed: 2,
+      recentRequests: 5,
+      accountId: '',
+      planType: '',
+      projectId: '',
+      baseUrl: 'https://api.deepseek.com',
+      prefix: 'deep',
+      priority: 7,
+      modelAliases: ['deepseek-chat'],
+      disableCooling: true,
+      runtimeOnly: true,
+    })
+    assert.equal('api-key' in accounts[0], false)
   } finally {
     await new Promise(resolve => server.close(resolve))
   }

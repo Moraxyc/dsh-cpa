@@ -7,7 +7,11 @@ CPA 的 `/v1/chat/completions`，同步 `/v1/models` 模型列表。
 
 ## 运行要求
 
-`dsh` 需要 `0.2.0-rc.2` 或更高版本。Web 服务重启后，管理路由依然可用。
+`dsh` 需要 `0.2.1-rc.2` 或更高版本。Web 服务重启后，管理路由依然可用。
+
+CPA 管理集成只使用 v8 management API（`/v8/management`），不再请求
+`/v0/management`。托管配置按 `config-version: 8` 的嵌套布局生成，读取时也只解析
+v8 字段。
 
 ## 快速开始
 
@@ -78,7 +82,7 @@ quota 缓存与并发，以及配置、设置、执行记录路径。其中端�
 插件会解析成功与失败响应中的 `x-cpa-trace-id`，把脱敏后的执行记录写入
 `$DSH_HOME/cpa/executions.json`，并给当前会话提供 `cpaUsage` 投影。
 `/dsh-cpa/execution-status?sessionId=...` 返回脱敏后的账号、额度快照、最近一次执行记录和当前会话的最近尝试，供 composer 下方的紧凑状态行读取。浏览器无法调用 CPA 的
-`/v0/management/api-call`，该接口仅由服务端 quota 查询使用。状态行只展示 CPA
+`/v8/management/requests/api-call`，该接口仅由服务端 quota 查询使用。状态行只展示 CPA
 集成特有的信息：当前使用服务商/套餐、失败/不可用状态和一个主额度窗口，不重复
 dsh 已展示的 token、耗时和性能统计。服务商同时从认证文件和 API key 配置读取；
 有执行记录时按 CPA trace 的账号定位当前服务商；trace 没有账号或账号不在已读取
@@ -86,14 +90,16 @@ dsh 已展示的 token、耗时和性能统计。服务商同时从认证文件�
 模型/用途和 CPA trace/request 标识。同一会话仍按 CPA 账号聚合请求、失败与
 token，作为 `cpaUsage` 投影保留；无管理 API 时状态行自动隐藏。
 
-内部 CPA 的 `usage-statistics-enabled` 默认开启，可在 CPA 设置面板中关闭。
+内部 CPA 的 `observability.usage.usage-statistics-enabled` 默认开启，可在 CPA 设置面板中关闭。
 
 ## CPA 摘要
 
 只读 `/dsh-cpa/summary` 接口由服务端使用 management key 调用 CPA 管理 API，
 浏览器只收到脱敏汇总数据，不包含 management key 或账号凭据。摘要包含版本/更新
-状态、白名单过滤的运行时配置、`/v0/management/api-key-usage` 与认证文件计数聚合
-的请求统计、脱敏账号，以及认证文件提供的模型到账号可用性。CPA 管理 API 不暴露
+状态、白名单过滤的运行时配置、`/v8/management/observability/usage/api-keys` 与
+`/v8/management/credentials` 计数聚合的请求统计、脱敏账号，以及
+`/v8/management/credentials/models` 提供的模型到账号可用性。API key 服务商从
+`/v8/management/config/api-keys` 读取，并按 `auth_index` 与凭据合并。CPA 管理 API 不暴露
 token 汇总，因此 token 项保持为 0。服务端做短时缓存；单个来源失败只记录错误，
 不影响其他数据。
 

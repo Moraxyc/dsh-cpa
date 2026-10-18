@@ -10,15 +10,13 @@ const RETRIEVE_USER_QUOTA_URL = 'https://cloudcode-pa.googleapis.com/v1internal:
 const FETCH_AVAILABLE_MODELS_URL = 'https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels'
 const API_TIMEOUT_MS = 20_000
 
-const PROVIDER_KEY_ENDPOINTS = [
-  { path: '/v0/management/gemini-api-key', key: 'gemini-api-key', provider: 'gemini' },
-  { path: '/v0/management/interactions-api-key', key: 'interactions-api-key', provider: 'interactions' },
-  { path: '/v0/management/claude-api-key', key: 'claude-api-key', provider: 'claude' },
-  { path: '/v0/management/codex-api-key', key: 'codex-api-key', provider: 'codex' },
-  { path: '/v0/management/xai-api-key', key: 'xai-api-key', provider: 'xai' },
-  { path: '/v0/management/vertex-api-key', key: 'vertex-api-key', provider: 'vertex' },
-  { path: '/v0/management/openai-compatibility', key: 'openai-compatibility', provider: 'openai-compatibility' },
-] as const satisfies readonly ProviderEndpointSpec[]
+export const CPA_CONFIG_PATH = '/v8/management/config'
+export const CPA_API_KEYS_CONFIG_PATH = '/v8/management/config/api-keys'
+export const CPA_CREDENTIALS_PATH = '/v8/management/credentials'
+export const CPA_CREDENTIAL_MODELS_PATH = '/v8/management/credentials/models'
+export const CPA_API_CALL_PATH = '/v8/management/requests/api-call'
+export const CPA_USAGE_API_KEYS_PATH = '/v8/management/observability/usage/api-keys'
+export const CPA_LATEST_VERSION_PATH = '/v8/management/server/latest-version'
 
 export type OptionSource<T> = T | (() => T)
 
@@ -104,12 +102,6 @@ export interface QuotaApiPayload extends PayloadSource {
   buckets?: JsonValue
   models?: JsonValue
   plan_type?: JsonValue
-}
-
-interface ProviderEndpointSpec {
-  path: string
-  key: string
-  provider: string
 }
 
 interface ProviderAccountMeta {
@@ -539,7 +531,7 @@ function sanitizeProviderAccount(
   fallbackLabel: string,
   meta: ProviderAccountMeta = {},
 ): CpaAccount | undefined {
-  const authIndex = stringOrEmpty(firstScalar(entry, ['auth-index', 'authIndex']))
+  const authIndex = stringOrEmpty(firstScalar(entry, ['auth_index', 'auth-index', 'authIndex']))
   if (authIndex === '') return undefined
   const label = stringOrEmpty(firstScalar(entry, ['name', 'label', 'prefix', 'base-url', 'baseUrl']))
     || fallbackLabel
@@ -619,42 +611,30 @@ function providerMeta(entry: JsonRecord): ProviderAccountMeta {
   }
 }
 
-function sanitizeProviderAccounts(body: JsonValue | undefined, spec: ProviderEndpointSpec): CpaAccount[] {
+function sanitizeProviderAccounts(body: JsonValue | undefined): CpaAccount[] {
   const record = asJsonRecord(body)
-  let entries: JsonValue[] = []
-  if (isArray(body)) {
-    entries = body
-  } else if (record !== null) {
-    const keyed = record[spec.key]
-    if (isArray(keyed)) {
-      entries = keyed
-    } else {
-      const items = record.items
-      if (isArray(items)) entries = items
-    }
-  }
+  if (record === null) return []
   const accounts: CpaAccount[] = []
-  for (const entry of entries) {
-    if (!isJsonRecord(entry)) continue
-    if (spec.key === 'openai-compatibility') {
-      const provider = openAIProviderName(entry)
-      const label = stringOrEmpty(firstScalar(entry, ['name', 'prefix', 'base-url', 'baseUrl']))
-        || 'OpenAI Compatible'
-      const meta = providerMeta(entry)
-      const top = sanitizeProviderAccount(entry, provider, label, meta)
-      if (top !== undefined) accounts.push(top)
-      const keys = isArray(entry['api-key-entries'])
-        ? entry['api-key-entries']
-        : isArray(entry.api_key_entries)
-          ? entry.api_key_entries
-          : isArray(entry.apiKeyEntries)
-            ? entry.apiKeyEntries
-            : []
+  for (const [providerKey, groups] of Object.entries(record)) {
+    if (!isArray(groups)) continue
+    for (const group of groups) {
+      if (!isJsonRecord(group)) continue
+      const provider = providerKey === 'openai-compatibility' ? openAIProviderName(group) : providerKey
+      const label = providerKey === 'openai-compatibility'
+        ? stringOrEmpty(firstScalar(group, ['name', 'prefix', 'base-url', 'baseUrl'])) || 'OpenAI Compatible'
+        : stringOrEmpty(firstScalar(group, ['name'])) || `${providerKey} API`
+      const meta = providerMeta(group)
+      const keys = isArray(group.keys) ? group.keys : []
+      if (keys.length === 0) {
+        const account = sanitizeProviderAccount(group, provider, label, meta)
+        if (account !== undefined) accounts.push(account)
+        continue
+      }
       for (let index = 0; index < keys.length; index += 1) {
         const keyRecord = asJsonRecord(keys[index])
         if (keyRecord === null) continue
         const merged: JsonRecord = { ...keyRecord }
-        merged.disabled = entry.disabled === true || keyRecord.disabled === true
+        merged.disabled = group.disabled === true || keyRecord.disabled === true
         const account = sanitizeProviderAccount(
           merged,
           provider,
@@ -663,20 +643,53 @@ function sanitizeProviderAccounts(body: JsonValue | undefined, spec: ProviderEnd
         )
         if (account !== undefined) accounts.push(account)
       }
-      continue
     }
-    const account = sanitizeProviderAccount(entry, spec.provider, `${spec.provider} API`, providerMeta(entry))
-    if (account !== undefined) accounts.push(account)
   }
   return accounts
 }
 
 export async function fetchApiProviders(baseURL: string, managementKey: string): Promise<CpaAccount[]> {
-  const settled = await Promise.allSettled(PROVIDER_KEY_ENDPOINTS.map(async spec => {
-    const body = await managementApi(baseURL, managementKey, spec.path)
-    return sanitizeProviderAccounts(body, spec)
-  }))
-  return settled.flatMap(result => result.status === 'fulfilled' ? result.value : [])
+  const body = await managementApi(baseURL, managementKey, CPA_API_KEYS_CONFIG_PATH)
+  return sanitizeProviderAccounts(body)
+}
+
+export function mergeAccounts(credentials: CpaAccount[], providers: CpaAccount[]): CpaAccount[] {
+  const byIndex = new Map<string, CpaAccount>()
+  const order: string[] = []
+  const remember = (account: CpaAccount): void => {
+    if (!byIndex.has(account.authIndex)) order.push(account.authIndex)
+    byIndex.set(account.authIndex, account)
+  }
+  for (const credential of credentials) remember(credential)
+  for (const provider of providers) {
+    const credential = byIndex.get(provider.authIndex)
+    if (credential === undefined) {
+      remember(provider)
+      continue
+    }
+    byIndex.set(provider.authIndex, mergeProviderAccount(credential, provider))
+  }
+  return order.flatMap(authIndex => {
+    const account = byIndex.get(authIndex)
+    return account === undefined ? [] : [account]
+  })
+}
+
+function mergeProviderAccount(credential: CpaAccount, provider: CpaAccount): CpaAccount {
+  const merged: CpaAccount = {
+    ...credential,
+    provider: provider.provider || credential.provider,
+    label: provider.label || credential.label,
+    source: provider.source || credential.source,
+    disabled: credential.disabled || provider.disabled,
+  }
+  if (provider.baseUrl !== undefined) merged.baseUrl = provider.baseUrl
+  if (provider.prefix !== undefined) merged.prefix = provider.prefix
+  if (provider.priority !== undefined) merged.priority = provider.priority
+  if (provider.note !== undefined) merged.note = provider.note
+  if (provider.modelAliases !== undefined) merged.modelAliases = provider.modelAliases
+  if (provider.disableCooling !== undefined) merged.disableCooling = provider.disableCooling
+  return merged
 }
 
 export function publicAccount(account: CpaAccount): CpaAccountPublic {
@@ -714,12 +727,12 @@ export async function managementApi(baseURL: string, managementKey: string, path
 }
 
 export async function fetchAuthFiles(baseURL: string, managementKey: string): Promise<CpaAccount[]> {
-  const body = await managementApi(baseURL, managementKey, '/v0/management/auth-files')
+  const body = await managementApi(baseURL, managementKey, CPA_CREDENTIALS_PATH)
   return sanitizeAuthFiles(isJsonRecord(body) ? body.files : undefined)
 }
 
 async function apiCall(baseURL: string, managementKey: string, payload: ApiCallPayload): Promise<QuotaApiPayload | null> {
-  const response = await fetch(`${cpaManagementRoot(baseURL)}/v0/management/api-call`, {
+  const response = await fetch(`${cpaManagementRoot(baseURL)}${CPA_API_CALL_PATH}`, {
     method: 'POST',
     headers: {
       accept: 'application/json',
@@ -891,11 +904,16 @@ export class CpaQuotaService {
   async refreshAccounts(now = Date.now()): Promise<CpaAccount[]> {
     const baseURL = resolvedOption(this.options.baseURL)
     const managementKey = resolvedOption(this.options.managementKey)
-    const [files, apiProviders] = await Promise.all([
+    const [filesResult, providersResult] = await Promise.allSettled([
       fetchAuthFiles(baseURL, managementKey),
       fetchApiProviders(baseURL, managementKey),
     ])
-    this.accounts = [...files, ...apiProviders]
+    if (filesResult.status === 'rejected' && providersResult.status === 'rejected') {
+      throw filesResult.reason
+    }
+    const files = filesResult.status === 'fulfilled' ? filesResult.value : []
+    const apiProviders = providersResult.status === 'fulfilled' ? providersResult.value : []
+    this.accounts = mergeAccounts(files, apiProviders)
     this.accountsFetchedAt = now
     return this.accounts
   }
