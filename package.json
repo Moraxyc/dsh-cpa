@@ -58,10 +58,10 @@
     }
   },
   "devDependencies": {
-    "@oxlint/plugins": "^1.88.0",
+    "@oxlint/plugins": "^1.89.0",
     "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
-    "oxlint": "^1.88.0",
+    "oxlint": "^1.89.0",
     "typescript": "^7.0.2"
   },
   "dependencies": {
