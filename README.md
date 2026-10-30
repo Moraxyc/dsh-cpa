@@ -7,7 +7,9 @@ CPA 的 `/v1/chat/completions`，同步 `/v1/models` 模型列表。
 
 ## 运行要求
 
-`dsh` 需要 `0.2.1-rc.2` 或更高版本。Web 服务重启后，管理路由依然可用。
+需要 Node.js `>=24.22.2` 和 `dsh` `0.2.1-rc.5`。CPA 兼容性验证使用
+[`8.0.48`](https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.48)。
+Web 服务重启后，管理路由依然可用。
 
 CPA 管理集成只使用 v8 management API（`/v8/management`），不再请求
 `/v0/management`。托管配置按 `config-version: 8` 的嵌套布局生成，读取时也只解析

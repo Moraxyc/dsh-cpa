@@ -25,7 +25,7 @@ jobs:
             - name: Upgrade npm for OIDC trusted publishing
               run: npm install -g npm@11
 
-            - run: npm install --no-audit --no-fund
+            - run: npm ci --ignore-scripts --no-audit --no-fund
             - run: npm run check
             - run: npm test
 

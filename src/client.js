@@ -582,7 +582,7 @@ window.__ModuleLoader__.load({
         rows.push({
           label: '日志',
           value: React.createElement('a', {
-            href: `${PANEL_URL}/request-log-by-id/${encodeURIComponent(execution.requestId)}`,
+            href: `${PANEL_URL}/v8/management/observability/logs/requests/${encodeURIComponent(execution.requestId)}`,
             target: '_blank',
             rel: 'noreferrer',
       }, '查看'),

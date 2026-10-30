@@ -188,15 +188,10 @@ function requestId(headers: Headers): ProviderRequestId | undefined {
 export function parseCpaTraceId(value: string | undefined): CpaTrace | undefined {
   if (!isString(value)) return undefined
   const trimmed = value.trim()
-  if (trimmed.length <= 15) return undefined
-  const separator = trimmed.indexOf('-', 14)
-  if (separator !== 14 || !/^\d{14}$/.test(trimmed.slice(0, 14))) return undefined
-  const tail = trimmed.slice(15)
-  const requestSeparator = tail.lastIndexOf('-')
-  if (requestSeparator <= 0 || requestSeparator === tail.length - 1) return undefined
-  const authIndex = tail.slice(0, requestSeparator)
-  const requestIdValue = tail.slice(requestSeparator + 1)
-  if (authIndex.length === 0 || !/^[0-9a-f]{8}$/i.test(requestIdValue)) return undefined
+  const match = /^\d{14}-(.+)-([0-9a-f]{8}(?:-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?)$/i.exec(trimmed)
+  const authIndex = match?.[1]
+  const requestIdValue = match?.[2]
+  if (authIndex === undefined || requestIdValue === undefined) return undefined
   return {
     traceId: trimmed,
     authIndex,

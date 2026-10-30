@@ -8,8 +8,9 @@ provider, sends requests to `/v1/chat/completions`, and syncs models from
 
 ## Requirements
 
-`dsh` `0.2.1-rc.2` or later is required. Management routes stay available
-after a Web service restart.
+Requires Node.js `>=24.22.2` and `dsh` `0.2.1-rc.5`. CPA compatibility is
+verified against [`8.0.48`](https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.48).
+Management routes stay available after a Web service restart.
 
 CPA management integration uses only the v8 management API
 (`/v8/management`) and no longer calls `/v0/management`. Managed configuration
