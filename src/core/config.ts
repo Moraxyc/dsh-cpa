@@ -6,6 +6,7 @@ import { access, chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join, sep } from 'node:path'
 import type { Volatile } from '@deepseek-ai/cordis'
+import { attributionHeaders } from '@deepseek-ai/dsh-llm'
 import z from '@deepseek-ai/schemastery'
 import { isError, isJsonRecord, isNonEmptyString, isNumber, isString } from './json.js'
 import type { JsonRecord, JsonValue } from './json.js'
@@ -417,6 +418,34 @@ export function normalizeModels(data: readonly JsonValue[]): CpaModel[] {
   return sortModels(models)
 }
 
+const MAX_MODEL_CATALOG_BYTES = 4 * 1024 * 1024
+
+/** Parse a JSON body, refusing payloads larger than `maxBytes` before buffering them. */
+export async function readBoundedJson(response: Response, maxBytes: number): Promise<JsonValue> {
+  const tooLarge = () => new Error(`response exceeds ${maxBytes} bytes`)
+  const declared = Number(response.headers.get('content-length') ?? Number.NaN)
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await response.body?.cancel()
+    throw tooLarge()
+  }
+  if (!response.body) return JSON.parse(await response.text())
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const part = await reader.read()
+      if (part.done) break
+      total += part.value.byteLength
+      if (total > maxBytes) throw tooLarge()
+      chunks.push(part.value)
+    }
+  } finally {
+    await reader.cancel().catch(() => {})
+  }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+}
+
 export async function fetchModels(
   baseURL: string,
   apiKey: string,
@@ -431,9 +460,9 @@ export async function fetchModels(
   if (signal?.aborted) forwardAbort()
   else signal?.addEventListener('abort', forwardAbort, { once: true })
   try {
-    const headers: Record<string, string> = apiKey
-      ? { accept: 'application/json', authorization: `Bearer ${apiKey}` }
-      : { accept: 'application/json' }
+    const headers = new Headers(attributionHeaders())
+    headers.set('accept', 'application/json')
+    if (apiKey) headers.set('authorization', `Bearer ${apiKey}`)
     const url = new URL(modelsUrl(baseURL))
     url.searchParams.set('client_version', 'dsh-cpa')
     const response = await fetch(url, {
@@ -441,9 +470,13 @@ export async function fetchModels(
       signal: controller.signal,
     })
     if (!response.ok) {
-      throw new Error(`models returned ${response.status}`)
+      await response.body?.cancel()
+      const hint = response.status === 401 || response.status === 403
+        ? '; check the CPA API key'
+        : ''
+      throw new Error(`models returned ${response.status}${hint}`)
     }
-    const body: unknown = await response.json()
+    const body = await readBoundedJson(response, MAX_MODEL_CATALOG_BYTES)
     const record = isJsonRecord(body) ? body : null
     const entries = Array.isArray(record?.data)
       ? record.data

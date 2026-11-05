@@ -14,6 +14,7 @@ import {
   fetchModels,
   modelsUrl,
   normalizeModels,
+  readBoundedJson,
   readCpaSettings,
   resolveCpaSettingsFromConfig,
   resolveOptions,
@@ -196,6 +197,34 @@ test('fetchModels requests the CPA rich model catalog', async () => {
   } finally {
     await new Promise(resolve => server.close(resolve))
   }
+})
+
+test('fetchModels hints at the API key on auth failures', async () => {
+  const server = createServer((_req, res) => {
+    res.writeHead(401)
+    res.end()
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  try {
+    await assert.rejects(
+      fetchModels(`http://127.0.0.1:${server.address().port}/v1`, 'sk-bad'),
+      /models returned 401; check the CPA API key/,
+    )
+  } finally {
+    await new Promise(resolve => server.close(resolve))
+  }
+})
+
+test('readBoundedJson rejects oversized streamed bodies', async () => {
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('["aaaa",'))
+      controller.enqueue(new TextEncoder().encode('"bbbb"]'))
+      controller.close()
+    },
+  })
+  await assert.rejects(readBoundedJson(new Response(body), 10), /exceeds 10 bytes/)
+  assert.deepEqual(await readBoundedJson(new Response('[1,2]'), 10), [1, 2])
 })
 
 test('modelSyncRetryDelay backs off exponentially up to the refresh interval', () => {
