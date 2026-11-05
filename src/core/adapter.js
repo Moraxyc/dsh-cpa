@@ -1,4 +1,4 @@
-import { assertUsableApiKey, attributionHeaders, ToolCallId, contentHasImage, EMPTY_RESPONSE_CODE, isContextWindowExceededError, isQuotaExceededError, LlmAdapter, LlmError, ProviderRequestId, ReasoningEffortId, } from '@deepseek-ai/dsh-llm';
+import { assertUsableApiKey, attributionHeaders, ToolCallId, contentHasImage, EMPTY_RESPONSE_CODE, isContextWindowExceededError, isQuotaExceededError, LlmAdapter, LlmError, offloadedImageText, ProviderRequestId, ReasoningEffortId, requestImageHandleText, } from '@deepseek-ai/dsh-llm';
 import { chatCompletionsUrl } from './config.js';
 import { isFunction, isJsonRecord, isNonEmptyString, isString } from './json.js';
 const DONE = '[DONE]';
@@ -15,6 +15,21 @@ const FALLBACK_ERROR_CODES = new Set([
     'HTTP_503',
     'HTTP_504',
 ]);
+// Same request-image budget dsh's built-in routes default to.
+const REQUEST_IMAGE_MAX_PIXELS = 4_194_304;
+const REQUEST_IMAGE_MAX_BYTES = 1_048_576;
+export function cpaImageTarget(image) {
+    const pixels = image.width * image.height;
+    if (pixels <= REQUEST_IMAGE_MAX_PIXELS) {
+        return { width: image.width, height: image.height, maxBytes: REQUEST_IMAGE_MAX_BYTES };
+    }
+    const scale = Math.sqrt(REQUEST_IMAGE_MAX_PIXELS / pixels);
+    return {
+        width: Math.max(1, Math.floor(image.width * scale)),
+        height: Math.max(1, Math.floor(image.height * scale)),
+        maxBytes: REQUEST_IMAGE_MAX_BYTES,
+    };
+}
 function providerRetryAfterMs(value) {
     if (value === null)
         return undefined;
@@ -74,7 +89,7 @@ function modelInfo(provider, model) {
         provider,
         id: model.id,
         name,
-        inputModalities: ['text'],
+        inputModalities: model.inputModalities ?? ['text'],
     };
     if (model.id !== name)
         info.description = model.id;
@@ -93,6 +108,45 @@ function assertTextOnly(blocks) {
         throw new LlmError('CPA does not support images', 'UNSUPPORTED_CONTENT');
     }
 }
+function imageParts(block, images) {
+    const access = images?.access(block.attachment);
+    if (block.offloaded === true) {
+        return [{ type: 'text', text: offloadedImageText(block.attachment, access) }];
+    }
+    const version = images?.versions.get(block.attachment.attachmentId);
+    if (version === undefined) {
+        throw new LlmError('CPA image input requires the durable attachment service', 'UNSUPPORTED_CONTENT');
+    }
+    const data = Buffer.from(version.data).toString('base64');
+    return [
+        { type: 'text', text: requestImageHandleText(block.attachment, version, access) },
+        { type: 'image_url', image_url: { url: `data:${version.mediaType};base64,${data}` } },
+    ];
+}
+function contentParts(blocks, images) {
+    const parts = [];
+    for (const block of blocks) {
+        if (block.type === 'text' && block.text.length > 0)
+            parts.push({ type: 'text', text: block.text });
+        else if (block.type === 'image')
+            parts.push(...imageParts(block, images));
+    }
+    return parts;
+}
+function joinText(parts) {
+    return parts.map(part => part.type === 'text' ? part.text : '').join('');
+}
+/** Collect the stored images a request sends natively, deduplicated by attachment id. */
+export function requestImageRefs(messages) {
+    const refs = new Map();
+    for (const message of messages) {
+        for (const block of message.content) {
+            if (block.type === 'image' && block.offloaded !== true)
+                refs.set(block.attachment.attachmentId, block.attachment);
+        }
+    }
+    return [...refs.values()];
+}
 function serializeAssistant(message) {
     const text = flattenText(message.content);
     const toolCalls = message.content
@@ -107,9 +161,45 @@ function serializeAssistant(message) {
         wire.tool_calls = toolCalls;
     return wire;
 }
-export function serializeMessages(messages) {
+/**
+ * Serialize request history to the chat-completions wire. Images are allowed
+ * in user and tool messages; chat-completions tool messages are text-only, so
+ * tool-result images follow the tool-result run as one user message.
+ */
+export function serializeMessages(messages, images) {
     const wire = [];
+    let toolImages = [];
+    const flushToolImages = () => {
+        if (toolImages.length === 0)
+            return;
+        wire.push({ role: 'user', content: toolImages });
+        toolImages = [];
+    };
     for (const message of messages) {
+        if (message.role !== 'tool')
+            flushToolImages();
+        if (message.role === 'user') {
+            if (!contentHasImage(message.content)) {
+                wire.push({ role: 'user', content: flattenText(message.content) });
+                continue;
+            }
+            const parts = contentParts(message.content, images);
+            wire.push({
+                role: 'user',
+                content: parts.every(part => part.type === 'text') ? joinText(parts) : parts,
+            });
+            continue;
+        }
+        if (message.role === 'tool') {
+            const parts = contentParts(message.content, images);
+            wire.push({
+                role: 'tool',
+                tool_call_id: message.toolCallId,
+                content: joinText(parts) || '(no output)',
+            });
+            toolImages.push(...parts.filter(part => part.type === 'image_url'));
+            continue;
+        }
         assertTextOnly(message.content);
         if (message.role === 'system') {
             wire.push({ role: 'system', content: flattenText(message.content) });
@@ -119,28 +209,17 @@ export function serializeMessages(messages) {
             wire.push(serializeAssistant(message));
             continue;
         }
-        if (message.role === 'tool') {
-            wire.push({
-                role: 'tool',
-                tool_call_id: message.toolCallId,
-                content: flattenText(message.content) || '(no output)',
-            });
-            continue;
-        }
-        if (message.role === 'developer') {
-            wire.push({ role: 'developer', content: flattenText(message.content) });
-            continue;
-        }
-        wire.push({ role: message.role, content: flattenText(message.content) });
+        wire.push({ role: 'developer', content: flattenText(message.content) });
     }
+    flushToolImages();
     return wire;
 }
-export function serializeRequest(options) {
+export function serializeRequest(options, images) {
     const messages = [];
     if (options.system !== undefined) {
         messages.push({ role: 'system', content: options.system });
     }
-    messages.push(...serializeMessages(options.messages));
+    messages.push(...serializeMessages(options.messages, images));
     const request = {
         model: options.model,
         messages,
@@ -442,6 +521,15 @@ export class CpaAdapter extends LlmAdapter {
         catch {
             // Routing is advisory; a stale or unavailable management API must not block chat.
         }
+        const imageRefs = requestImageRefs(options.messages);
+        let images;
+        if (imageRefs.length > 0) {
+            if (!this.acceptsImages(options.model, true)) {
+                throw new LlmError(`CPA model "${options.model}" does not support image input`, 'UNSUPPORTED_CONTENT');
+            }
+            models = models.filter(model => model === options.model || this.acceptsImages(model, false));
+            images = await this.prepareImages(imageRefs, options.signal);
+        }
         let lastError;
         let previousModel;
         let previousErrorCode;
@@ -456,7 +544,7 @@ export class CpaAdapter extends LlmAdapter {
                 fallbackReason: previousErrorCode,
             };
             try {
-                for await (const event of this.streamAttempt({ ...options, model }, context)) {
+                for await (const event of this.streamAttempt({ ...options, model }, context, images)) {
                     emitted = true;
                     yield event;
                 }
@@ -473,10 +561,37 @@ export class CpaAdapter extends LlmAdapter {
         if (lastError !== undefined)
             throw lastError;
     }
-    async *streamAttempt(options, context) {
+    imageRequestTarget(_provider, _model, image) {
+        return cpaImageTarget(image);
+    }
+    /** Whether a model takes image input; an unsynced model is trusted only when requested directly. */
+    acceptsImages(model, requested) {
+        const configured = this.options.getModels().find(entry => entry.id === model);
+        if (configured === undefined)
+            return requested;
+        return configured.inputModalities?.includes('image') === true;
+    }
+    async prepareImages(refs, signal) {
+        const attachments = this.options.resolveAttachments?.();
+        if (attachments === undefined) {
+            throw new LlmError('CPA image input requires the durable attachment service', 'UNSUPPORTED_CONTENT');
+        }
+        const prepared = await Promise.all(refs.map(ref => attachments.readImageRequest(ref, cpaImageTarget(ref), signal)));
+        const versions = new Map();
+        for (const [index, ref] of refs.entries()) {
+            const version = prepared[index];
+            if (version !== undefined)
+                versions.set(ref.attachmentId, version);
+        }
+        return {
+            versions,
+            access: ref => this.options.resolveImageAccess?.(attachments, ref),
+        };
+    }
+    async *streamAttempt(options, context, images) {
         const apiKey = await this.options.resolveApiKey();
         const url = chatCompletionsUrl(this.options.baseURL);
-        const body = serializeRequest(options);
+        const body = serializeRequest(options, images);
         const payload = JSON.stringify(body);
         const headers = {
             authorization: `Bearer ${apiKey}`,

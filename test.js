@@ -24,6 +24,7 @@ import {
 } from './src/core/config.js'
 import {
   CpaAdapter,
+  cpaImageTarget,
   parseCpaTraceId,
   serializeMessages,
 } from './src/core/adapter.js'
@@ -522,6 +523,124 @@ test('CpaAdapter captures CPA trace metadata from successful streams', async () 
     assert.equal(captured.inputTokens, 1)
     assert.equal(captured.outputTokens, 1)
     assert.equal(events.some(event => event.type === 'finish'), true)
+  } finally {
+    await new Promise(resolve => server.close(resolve))
+  }
+})
+
+const IMAGE_REF = Object.freeze({
+  attachmentId: 'a'.repeat(64),
+  mediaType: 'image/png',
+  bytes: 3,
+  width: 4000,
+  height: 3000,
+  name: 'shot.png',
+})
+
+const REQUEST_IMAGES = {
+  versions: new Map([[IMAGE_REF.attachmentId, {
+    data: new Uint8Array([1, 2, 3]),
+    mediaType: 'image/png',
+    width: 2364,
+    height: 1773,
+  }]]),
+  access: () => undefined,
+}
+
+test('normalizeModels reads catalog input modalities', () => {
+  assert.deepEqual(normalizeModels([
+    { slug: 'vision', input_modalities: ['text', 'image', 'IMAGE', 'audio'] },
+    { slug: 'empty', input_modalities: ['audio'] },
+  ]), [
+    { id: 'empty' },
+    { id: 'vision', inputModalities: ['text', 'image'] },
+  ])
+})
+
+test('cpaImageTarget keeps small images and downscales to the pixel budget', () => {
+  assert.deepEqual(cpaImageTarget({ width: 800, height: 600 }), { width: 800, height: 600, maxBytes: 1_048_576 })
+  const target = cpaImageTarget(IMAGE_REF)
+  assert.ok(target.width * target.height <= 4_194_304)
+  assert.equal(target.width, 2364)
+})
+
+test('serializeMessages sends user images natively and moves tool images after the tool run', () => {
+  const image = { type: 'image', attachment: IMAGE_REF }
+  const wire = serializeMessages([
+    { role: 'user', content: [{ type: 'text', text: 'look' }, image] },
+    {
+      role: 'assistant',
+      content: [
+        { type: 'tool-call', id: 'c1', name: 'shot', arguments: '{}' },
+        { type: 'tool-call', id: 'c2', name: 'read', arguments: '{}' },
+      ],
+    },
+    { role: 'tool', toolCallId: 'c1', content: [image] },
+    { role: 'tool', toolCallId: 'c2', content: [{ type: 'text', text: 'done' }] },
+    { role: 'user', content: [{ type: 'image', attachment: IMAGE_REF, offloaded: true }] },
+  ], REQUEST_IMAGES)
+  const dataUrl = 'data:image/png;base64,AQID'
+  assert.deepEqual(wire.map(message => message.role), ['user', 'assistant', 'tool', 'tool', 'user', 'user'])
+  assert.equal(wire[0].content[0].text, 'look')
+  assert.equal(wire[0].content[1].type, 'text')
+  assert.deepEqual(wire[0].content[2], { type: 'image_url', image_url: { url: dataUrl } })
+  assert.equal(typeof wire[2].content, 'string')
+  assert.ok(wire[2].content.length > 0)
+  assert.deepEqual(wire[4].content, [{ type: 'image_url', image_url: { url: dataUrl } }])
+  assert.equal(typeof wire[5].content, 'string')
+  assert.throws(
+    () => serializeMessages([{ role: 'user', content: [image] }]),
+    error => error.code === 'UNSUPPORTED_CONTENT',
+  )
+})
+
+test('CpaAdapter sends images only to image-capable models', async () => {
+  const bodies = []
+  const server = createServer(async (req, res) => {
+    let raw = ''
+    for await (const chunk of req) raw += chunk
+    bodies.push(JSON.parse(raw))
+    if (bodies.length === 1) {
+      res.writeHead(503, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: { message: 'busy' } }))
+      return
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.end('data: {"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const targets = []
+  const adapter = new CpaAdapter({
+    baseURL: `http://127.0.0.1:${server.address().port}/v1`,
+    provider: 'cpa',
+    getModels: () => [
+      { id: 'vision', inputModalities: ['text', 'image'] },
+      { id: 'text-only', inputModalities: ['text'] },
+      { id: 'vision-2', inputModalities: ['text', 'image'] },
+    ],
+    resolveApiKey: () => Promise.resolve('sk-test'),
+    resolveRoute: () => Promise.resolve(['text-only', 'vision-2']),
+    resolveAttachments: () => ({
+      readImageRequest: (_ref, target) => {
+        targets.push(target)
+        return Promise.resolve(REQUEST_IMAGES.versions.get(IMAGE_REF.attachmentId))
+      },
+    }),
+  })
+  const request = model => ({
+    messages: [{ role: 'user', content: [{ type: 'image', attachment: IMAGE_REF }] }],
+    model,
+  })
+  try {
+    await assert.rejects(
+      (async () => { for await (const _ of adapter.stream(request('text-only'))) { /* drain */ } })(),
+      error => error.code === 'UNSUPPORTED_CONTENT',
+    )
+    for await (const _ of adapter.stream(request('vision'))) { /* drain */ }
+    assert.deepEqual(bodies.map(body => body.model), ['vision', 'vision-2'])
+    assert.equal(bodies[1].messages[0].content.at(-1).type, 'image_url')
+    assert.equal(targets.length, 1)
+    assert.equal((await adapter.resolveModel('cpa', 'vision')).inputModalities.includes('image'), true)
   } finally {
     await new Promise(resolve => server.close(resolve))
   }

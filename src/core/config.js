@@ -50,6 +50,17 @@ export const Config = z.object({
     quotaTtlMs: z.number().step(1).min(1).default(DEFAULT_QUOTA_TTL_MS).volatile(),
     quotaConcurrency: z.number().step(1).min(1).default(DEFAULT_QUOTA_CONCURRENCY).volatile(),
 });
+function normalizeInputModalities(value) {
+    if (!Array.isArray(value))
+        return undefined;
+    const modalities = new Set();
+    for (const raw of value) {
+        const modality = isString(raw) ? raw.trim().toLowerCase() : '';
+        if (modality === 'text' || modality === 'image')
+            modalities.add(modality);
+    }
+    return modalities.size > 0 ? [...modalities] : undefined;
+}
 const REASONING_LEVEL_NAMES = new Map([
     ['none', 'None'],
     ['auto', 'Auto'],
@@ -229,6 +240,9 @@ export function normalizeModels(data) {
         const reasoning = normalizeReasoning(entry);
         if (reasoning !== undefined)
             model.reasoning = reasoning;
+        const inputModalities = normalizeInputModalities(entry.input_modalities);
+        if (inputModalities !== undefined)
+            model.inputModalities = inputModalities;
         models.push(model);
     }
     return sortModels(models);

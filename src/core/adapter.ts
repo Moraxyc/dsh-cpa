@@ -8,11 +8,14 @@ import {
   isQuotaExceededError,
   LlmAdapter,
   LlmError,
+  offloadedImageText,
   ProviderRequestId,
   ReasoningEffortId,
+  requestImageHandleText,
 } from '@deepseek-ai/dsh-llm'
 import type {
   ContentBlock,
+  ImageBlock,
   FinishReason,
   GenerateOptions,
   LlmErrorOptions,
@@ -75,6 +78,52 @@ export interface CpaExecutionEvent {
   errorCode?: string
 }
 
+type ImageRef = ImageBlock['attachment']
+type ImageAccess = Parameters<typeof offloadedImageText>[1]
+
+/** Request-image target, matching dsh-attachment's `ImageRequestTarget`. */
+export interface CpaImageTarget {
+  width: number
+  height: number
+  maxBytes: number
+}
+
+/** One encoded request version of a stored image. */
+export interface CpaRequestImage {
+  data: Uint8Array
+  mediaType: string
+  width: number
+  height: number
+}
+
+/** The subset of dsh's attachment service the adapter reads request images through. */
+export interface CpaAttachmentStore {
+  readImageRequest(ref: ImageRef, target: CpaImageTarget, signal?: AbortSignal): Promise<CpaRequestImage>
+}
+
+/** Request images prepared before serialization, keyed by attachment id. */
+export interface CpaRequestImages {
+  versions: ReadonlyMap<string, CpaRequestImage>
+  access(ref: ImageRef): ImageAccess
+}
+
+// Same request-image budget dsh's built-in routes default to.
+const REQUEST_IMAGE_MAX_PIXELS = 4_194_304
+const REQUEST_IMAGE_MAX_BYTES = 1_048_576
+
+export function cpaImageTarget(image: Pick<ImageRef, 'width' | 'height'>): CpaImageTarget {
+  const pixels = image.width * image.height
+  if (pixels <= REQUEST_IMAGE_MAX_PIXELS) {
+    return { width: image.width, height: image.height, maxBytes: REQUEST_IMAGE_MAX_BYTES }
+  }
+  const scale = Math.sqrt(REQUEST_IMAGE_MAX_PIXELS / pixels)
+  return {
+    width: Math.max(1, Math.floor(image.width * scale)),
+    height: Math.max(1, Math.floor(image.height * scale)),
+    maxBytes: REQUEST_IMAGE_MAX_BYTES,
+  }
+}
+
 export interface CpaAdapterOptions {
   baseURL: string
   provider: string
@@ -84,6 +133,8 @@ export interface CpaAdapterOptions {
   resolveApiKey: () => Promise<string>
   resolveRoute?: (options: GenerateOptions) => Promise<readonly string[] | CpaRoutePlan>
   onExecution?: (execution: CpaExecutionEvent) => void | Promise<void>
+  resolveAttachments?: () => CpaAttachmentStore | undefined
+  resolveImageAccess?: (attachments: CpaAttachmentStore, ref: ImageRef) => ImageAccess
 }
 
 export interface WireToolCall {
@@ -92,9 +143,13 @@ export interface WireToolCall {
   function: { name: string; arguments: string }
 }
 
+export type WireContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } }
+
 export interface WireMessage {
   role: string
-  content: string
+  content: string | WireContentPart[]
   tool_calls?: WireToolCall[]
   tool_call_id?: ToolCallId
 }
@@ -225,7 +280,7 @@ function modelInfo(provider: string, model: CpaModel): LlmModelInfo {
     provider,
     id: model.id,
     name,
-    inputModalities: ['text'],
+    inputModalities: model.inputModalities ?? ['text'],
   }
   if (model.id !== name) info.description = model.id
   return info
@@ -245,6 +300,46 @@ function assertTextOnly(blocks: readonly ContentBlock[]): void {
   }
 }
 
+function imageParts(block: ImageBlock, images: CpaRequestImages | undefined): WireContentPart[] {
+  const access = images?.access(block.attachment)
+  if (block.offloaded === true) {
+    return [{ type: 'text', text: offloadedImageText(block.attachment, access) }]
+  }
+  const version = images?.versions.get(block.attachment.attachmentId)
+  if (version === undefined) {
+    throw new LlmError('CPA image input requires the durable attachment service', 'UNSUPPORTED_CONTENT')
+  }
+  const data = Buffer.from(version.data).toString('base64')
+  return [
+    { type: 'text', text: requestImageHandleText(block.attachment, version, access) },
+    { type: 'image_url', image_url: { url: `data:${version.mediaType};base64,${data}` } },
+  ]
+}
+
+function contentParts(blocks: readonly ContentBlock[], images: CpaRequestImages | undefined): WireContentPart[] {
+  const parts: WireContentPart[] = []
+  for (const block of blocks) {
+    if (block.type === 'text' && block.text.length > 0) parts.push({ type: 'text', text: block.text })
+    else if (block.type === 'image') parts.push(...imageParts(block, images))
+  }
+  return parts
+}
+
+function joinText(parts: readonly WireContentPart[]): string {
+  return parts.map(part => part.type === 'text' ? part.text : '').join('')
+}
+
+/** Collect the stored images a request sends natively, deduplicated by attachment id. */
+export function requestImageRefs(messages: readonly RequestMessage[]): ImageRef[] {
+  const refs = new Map<string, ImageRef>()
+  for (const message of messages) {
+    for (const block of message.content) {
+      if (block.type === 'image' && block.offloaded !== true) refs.set(block.attachment.attachmentId, block.attachment)
+    }
+  }
+  return [...refs.values()]
+}
+
 function serializeAssistant(message: Message): WireMessage {
   const text = flattenText(message.content)
   const toolCalls: WireToolCall[] = message.content
@@ -259,9 +354,46 @@ function serializeAssistant(message: Message): WireMessage {
   return wire
 }
 
-export function serializeMessages(messages: readonly RequestMessage[]): WireMessage[] {
+/**
+ * Serialize request history to the chat-completions wire. Images are allowed
+ * in user and tool messages; chat-completions tool messages are text-only, so
+ * tool-result images follow the tool-result run as one user message.
+ */
+export function serializeMessages(
+  messages: readonly RequestMessage[],
+  images?: CpaRequestImages,
+): WireMessage[] {
   const wire: WireMessage[] = []
+  let toolImages: WireContentPart[] = []
+  const flushToolImages = () => {
+    if (toolImages.length === 0) return
+    wire.push({ role: 'user', content: toolImages })
+    toolImages = []
+  }
   for (const message of messages) {
+    if (message.role !== 'tool') flushToolImages()
+    if (message.role === 'user') {
+      if (!contentHasImage(message.content)) {
+        wire.push({ role: 'user', content: flattenText(message.content) })
+        continue
+      }
+      const parts = contentParts(message.content, images)
+      wire.push({
+        role: 'user',
+        content: parts.every(part => part.type === 'text') ? joinText(parts) : parts,
+      })
+      continue
+    }
+    if (message.role === 'tool') {
+      const parts = contentParts(message.content, images)
+      wire.push({
+        role: 'tool',
+        tool_call_id: message.toolCallId,
+        content: joinText(parts) || '(no output)',
+      })
+      toolImages.push(...parts.filter(part => part.type === 'image_url'))
+      continue
+    }
     assertTextOnly(message.content)
     if (message.role === 'system') {
       wire.push({ role: 'system', content: flattenText(message.content) })
@@ -271,29 +403,18 @@ export function serializeMessages(messages: readonly RequestMessage[]): WireMess
       wire.push(serializeAssistant(message))
       continue
     }
-    if (message.role === 'tool') {
-      wire.push({
-        role: 'tool',
-        tool_call_id: message.toolCallId,
-        content: flattenText(message.content) || '(no output)',
-      })
-      continue
-    }
-    if (message.role === 'developer') {
-      wire.push({ role: 'developer', content: flattenText(message.content) })
-      continue
-    }
-    wire.push({ role: message.role, content: flattenText(message.content) })
+    wire.push({ role: 'developer', content: flattenText(message.content) })
   }
+  flushToolImages()
   return wire
 }
 
-export function serializeRequest(options: GenerateOptions): WireRequest {
+export function serializeRequest(options: GenerateOptions, images?: CpaRequestImages): WireRequest {
   const messages: WireMessage[] = []
   if (options.system !== undefined) {
     messages.push({ role: 'system', content: options.system })
   }
-  messages.push(...serializeMessages(options.messages))
+  messages.push(...serializeMessages(options.messages, images))
   const request: WireRequest = {
     model: options.model,
     messages,
@@ -589,6 +710,16 @@ export class CpaAdapter extends LlmAdapter {
       // Routing is advisory; a stale or unavailable management API must not block chat.
     }
 
+    const imageRefs = requestImageRefs(options.messages)
+    let images: CpaRequestImages | undefined
+    if (imageRefs.length > 0) {
+      if (!this.acceptsImages(options.model, true)) {
+        throw new LlmError(`CPA model "${options.model}" does not support image input`, 'UNSUPPORTED_CONTENT')
+      }
+      models = models.filter(model => model === options.model || this.acceptsImages(model, false))
+      images = await this.prepareImages(imageRefs, options.signal)
+    }
+
     let lastError: unknown
     let previousModel: string | undefined
     let previousErrorCode: string | undefined
@@ -603,7 +734,7 @@ export class CpaAdapter extends LlmAdapter {
         fallbackReason: previousErrorCode,
       }
       try {
-        for await (const event of this.streamAttempt({ ...options, model }, context)) {
+        for await (const event of this.streamAttempt({ ...options, model }, context, images)) {
           emitted = true
           yield event
         }
@@ -618,10 +749,42 @@ export class CpaAdapter extends LlmAdapter {
     if (lastError !== undefined) throw lastError
   }
 
-  private async * streamAttempt(options: GenerateOptions, context: AttemptContext): AsyncGenerator<StreamChunk> {
+  override imageRequestTarget(_provider: string, _model: string, image: ImageRef): CpaImageTarget {
+    return cpaImageTarget(image)
+  }
+
+  /** Whether a model takes image input; an unsynced model is trusted only when requested directly. */
+  private acceptsImages(model: string, requested: boolean): boolean {
+    const configured = this.options.getModels().find(entry => entry.id === model)
+    if (configured === undefined) return requested
+    return configured.inputModalities?.includes('image') === true
+  }
+
+  private async prepareImages(refs: readonly ImageRef[], signal?: AbortSignal): Promise<CpaRequestImages> {
+    const attachments = this.options.resolveAttachments?.()
+    if (attachments === undefined) {
+      throw new LlmError('CPA image input requires the durable attachment service', 'UNSUPPORTED_CONTENT')
+    }
+    const prepared = await Promise.all(refs.map(ref => attachments.readImageRequest(ref, cpaImageTarget(ref), signal)))
+    const versions = new Map<string, CpaRequestImage>()
+    for (const [index, ref] of refs.entries()) {
+      const version = prepared[index]
+      if (version !== undefined) versions.set(ref.attachmentId, version)
+    }
+    return {
+      versions,
+      access: ref => this.options.resolveImageAccess?.(attachments, ref),
+    }
+  }
+
+  private async * streamAttempt(
+    options: GenerateOptions,
+    context: AttemptContext,
+    images?: CpaRequestImages,
+  ): AsyncGenerator<StreamChunk> {
     const apiKey = await this.options.resolveApiKey()
     const url = chatCompletionsUrl(this.options.baseURL)
-    const body = serializeRequest(options)
+    const body = serializeRequest(options, images)
     const payload = JSON.stringify(body)
     const headers = {
       authorization: `Bearer ${apiKey}`,

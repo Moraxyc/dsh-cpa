@@ -1,6 +1,11 @@
+import { resolveImageAttachmentAccess } from '@deepseek-ai/dsh-llm'
 import type { LlmAdapter } from '@deepseek-ai/dsh-llm'
 import { CpaAdapter, resolveApiKey } from '../core/adapter.js'
-import type { CpaExecutionEvent } from '../core/adapter.js'
+import type { CpaAttachmentStore, CpaExecutionEvent } from '../core/adapter.js'
+
+interface HostPathMapper {
+  processPathFromHostPath(hostPath: string): string | undefined
+}
 import {
   assertCpaBinary,
   DEFAULT_AUTH_FILES_TTL_MS,
@@ -328,6 +333,12 @@ export class CpaController {
       resolveApiKey: resolveApiKey(ctx, options.apiKeyRef, () => this.currentApiKey()),
       resolveRoute: options => this.resolveRoute(options),
       onExecution: execution => this.recordExecution(execution),
+      resolveAttachments: () => ctx.get<CpaAttachmentStore>('attachments'),
+      resolveImageAccess: (attachments, ref) => resolveImageAttachmentAccess(
+        attachments,
+        hostPath => ctx.get<HostPathMapper>('fs')?.processPathFromHostPath(hostPath),
+        ref,
+      ),
     })
     this.executionStore = new CpaExecutionStore(settings.executionsPath || options.executionsPath)
     this.quotaService = new CpaQuotaService({

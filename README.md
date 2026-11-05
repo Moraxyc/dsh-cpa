@@ -52,7 +52,13 @@ npx @deepseek-ai/dsh plugin --profile headless add .
 注入 provider 适配器。启动前会先在 PATH 中解析可执行文件；二进制不在 PATH
 时，在 CPA 设置页的内部 CPA 路径中填写绝对路径。
 
-模型每 5 分钟从 `/v1/models` 同步一次。
+模型每 5 分钟从 `/v1/models` 同步一次。同步失败时保留上一次的模型列表，并按指数退避重试。
+
+## 图片输入
+
+模型目录中 `input_modalities` 含 `image` 的模型会声明支持图片。用户消息中的图片以
+`image_url` data URL 发送；工具结果中的图片在该轮工具结果之后作为一条用户消息发送。
+带图片的请求只会切换到同样支持图片的候选模型。
 
 ## Agent 路由与故障切换
 

@@ -55,7 +55,15 @@ By default the plugin writes `$DSH_HOME/cpa/config.yaml`, starts
 Before starting, the plugin resolves the executable from `PATH`; if it is
 missing, enter an absolute path in the internal CPA setting.
 
-Models sync from `/v1/models` every 5 minutes.
+Models sync from `/v1/models` every 5 minutes. A failed sync keeps the last
+model list and retries with exponential backoff.
+
+## Image Input
+
+Models whose catalog `input_modalities` include `image` declare image input.
+User-message images are sent as `image_url` data URLs; tool-result images are
+sent as one user message after that tool-result run. Requests with images only
+fall back to candidates that also accept images.
 
 ## Agent Routing and Failover
 

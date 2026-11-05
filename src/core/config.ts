@@ -193,6 +193,19 @@ export interface CpaModel {
   contextLength?: number
   maxCompletionTokens?: number
   reasoning?: CpaReasoning
+  inputModalities?: CpaInputModality[]
+}
+
+export type CpaInputModality = 'text' | 'image'
+
+function normalizeInputModalities(value: JsonValue | undefined): CpaInputModality[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const modalities = new Set<CpaInputModality>()
+  for (const raw of value) {
+    const modality = isString(raw) ? raw.trim().toLowerCase() : ''
+    if (modality === 'text' || modality === 'image') modalities.add(modality)
+  }
+  return modalities.size > 0 ? [...modalities] : undefined
 }
 
 export interface ModelCatalogEntry {
@@ -413,6 +426,8 @@ export function normalizeModels(data: readonly JsonValue[]): CpaModel[] {
     if (maxCompletionTokens !== undefined) model.maxCompletionTokens = maxCompletionTokens
     const reasoning = normalizeReasoning(entry)
     if (reasoning !== undefined) model.reasoning = reasoning
+    const inputModalities = normalizeInputModalities(entry.input_modalities)
+    if (inputModalities !== undefined) model.inputModalities = inputModalities
     models.push(model)
   }
   return sortModels(models)
