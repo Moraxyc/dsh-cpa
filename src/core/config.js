@@ -192,29 +192,39 @@ function sortModels(models) {
         });
     });
 }
+function positiveIntegerField(...values) {
+    return values.find((value) => isNumber(value) && Number.isInteger(value) && value > 0);
+}
 export function normalizeModels(data) {
     const models = [];
+    const seen = new Set();
     for (const entry of data) {
         if (!isJsonRecord(entry))
+            continue;
+        // The Codex catalog marks deprecated or internal models as hidden.
+        if (entry.visibility === 'hide')
             continue;
         const id = isNonEmptyString(entry.id)
             ? entry.id
             : isNonEmptyString(entry.slug)
                 ? entry.slug
                 : undefined;
-        if (!isNonEmptyString(id))
+        if (!isNonEmptyString(id) || seen.has(id))
             continue;
+        seen.add(id);
         const model = { id };
-        if (isNonEmptyString(entry.display_name)) {
-            model.displayName = entry.display_name;
-        }
+        const displayName = isNonEmptyString(entry.display_name)
+            ? entry.display_name
+            : isNonEmptyString(entry.name) ? entry.name : undefined;
+        if (displayName !== undefined)
+            model.displayName = displayName;
         const contextLength = entry.context_length ?? entry.context_window ?? entry.max_context_window;
         if (isNumber(contextLength) && Number.isInteger(contextLength) && contextLength > 0) {
             model.contextLength = contextLength;
         }
-        if (isNumber(entry.max_completion_tokens) && Number.isInteger(entry.max_completion_tokens) && entry.max_completion_tokens > 0) {
-            model.maxCompletionTokens = entry.max_completion_tokens;
-        }
+        const maxCompletionTokens = positiveIntegerField(entry.max_completion_tokens, entry.max_output_tokens, entry.max_tokens);
+        if (maxCompletionTokens !== undefined)
+            model.maxCompletionTokens = maxCompletionTokens;
         const reasoning = normalizeReasoning(entry);
         if (reasoning !== undefined)
             model.reasoning = reasoning;

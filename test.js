@@ -143,7 +143,17 @@ test('normalizeModels sorts models and maps reasoning levels', () => {
     },
     { id: 'model-2', displayName: 'Model 2' },
     { id: 'model-10', displayName: 'Model 10' },
-    { id: 'model-1' },
+  ])
+})
+
+test('normalizeModels skips hidden models and reads alternate catalog fields', () => {
+  assert.deepEqual(normalizeModels([
+    { slug: 'hidden', visibility: 'hide' },
+    { slug: 'listed', visibility: 'list', name: 'Listed', max_output_tokens: 8192 },
+    { id: 'plain', max_tokens: 1024 },
+  ]), [
+    { id: 'listed', displayName: 'Listed', maxCompletionTokens: 8192 },
+    { id: 'plain', maxCompletionTokens: 1024 },
   ])
 })
 
