@@ -222,11 +222,16 @@ export function normalizeModels(data) {
     }
     return sortModels(models);
 }
-export async function fetchModels(baseURL, apiKey, timeoutMs = 10_000) {
+export async function fetchModels(baseURL, apiKey, timeoutMs = 10_000, signal) {
     const controller = new AbortController();
     const timer = setTimeout(() => {
         controller.abort(new Error('model sync timed out'));
     }, timeoutMs);
+    const forwardAbort = () => controller.abort(signal?.reason);
+    if (signal?.aborted)
+        forwardAbort();
+    else
+        signal?.addEventListener('abort', forwardAbort, { once: true });
     try {
         const headers = apiKey
             ? { accept: 'application/json', authorization: `Bearer ${apiKey}` }
@@ -258,6 +263,7 @@ export async function fetchModels(baseURL, apiKey, timeoutMs = 10_000) {
     }
     finally {
         clearTimeout(timer);
+        signal?.removeEventListener('abort', forwardAbort);
     }
 }
 export function buildManagedConfig({ host, port, apiKey, managementKey, usageStatisticsEnabled = true }) {

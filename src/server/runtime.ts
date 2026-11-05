@@ -98,6 +98,14 @@ interface CpaUsageEvent {
   data: ExecutionInput | null | undefined
 }
 
+const MODEL_SYNC_RETRY_INITIAL_MS = 3_000
+
+/** Exponential backoff after failed model syncs, capped by the healthy refresh interval. */
+export function modelSyncRetryDelay(failures: number, refreshIntervalMs: number): number {
+  const delay = MODEL_SYNC_RETRY_INITIAL_MS * 2 ** Math.max(0, failures - 1)
+  return Math.min(delay, refreshIntervalMs)
+}
+
 function internalBaseURL(options: CpaOptions, port = options.port): string {
   return `http://${options.host}:${port}/v1`
 }
@@ -295,7 +303,10 @@ export class CpaController {
   private activeMode: CpaMode | undefined
   private managementKey: string | undefined
   private lastError = ''
-  private timer: ReturnType<typeof setInterval> | undefined
+  private timer: ReturnType<typeof setTimeout> | undefined
+  private syncController: AbortController | undefined
+  private syncFailures = 0
+  private lastSyncError = ''
   private disposePanel: Disposer | undefined
   private queue: Promise<void> = Promise.resolve()
   private readonly adapter: CpaAdapter
@@ -608,6 +619,7 @@ export class CpaController {
 
   async stopRuntime(): Promise<void> {
     this.stopTimer()
+    this.resetModelSync()
     if (this.registration !== undefined) {
       this.registration()
       this.registration = undefined
@@ -626,28 +638,63 @@ export class CpaController {
     this.registration = this.ctx.llm.registerAdapter([this.options.provider], this.adapter)
   }
 
-  async syncModels(baseURL = this.currentBaseURL(), apiKey = this.currentApiKey()): Promise<void> {
+  /**
+   * Refresh the model catalog. A newer sync aborts an older one, and a failed
+   * sync keeps the last good catalog so a transient CPA outage does not empty
+   * the model list.
+   * @returns whether this sync installed a catalog.
+   */
+  async syncModels(baseURL = this.currentBaseURL(), apiKey = this.currentApiKey()): Promise<boolean> {
+    this.syncController?.abort(new Error('model sync superseded'))
+    const controller = new AbortController()
+    this.syncController = controller
     try {
-      this.models = await fetchModels(baseURL, apiKey, this.options.startTimeoutMs)
+      const models = await fetchModels(baseURL, apiKey, this.options.startTimeoutMs, controller.signal)
+      if (controller.signal.aborted) return false
+      this.models = models
+      this.syncFailures = 0
+      this.lastSyncError = ''
+      return true
     } catch (error) {
-      this.ctx.logger?.warn?.(`dsh-cpa: model sync failed: ${errorMessage(error)}`)
-      this.models = []
+      if (controller.signal.aborted) return false
+      this.syncFailures += 1
+      const message = errorMessage(error)
+      if (message !== this.lastSyncError) {
+        this.ctx.logger?.warn?.(`dsh-cpa: model sync failed: ${message}`)
+        this.lastSyncError = message
+      }
+      return false
+    } finally {
+      if (this.syncController === controller) this.syncController = undefined
     }
+  }
+
+  resetModelSync(): void {
+    this.syncController?.abort(new Error('model sync cancelled'))
+    this.syncController = undefined
+    this.syncFailures = 0
+    this.lastSyncError = ''
   }
 
   startTimer(): void {
     this.stopTimer()
     if (!this.active || this.settings.refreshIntervalMs <= 0) return
-    this.timer = setInterval(() => {
+    const delay = this.syncFailures > 0
+      ? modelSyncRetryDelay(this.syncFailures, this.settings.refreshIntervalMs)
+      : this.settings.refreshIntervalMs
+    this.timer = setTimeout(() => {
+      this.timer = undefined
       if (!this.active) return
-      void this.syncModels()
-    }, this.settings.refreshIntervalMs)
+      void this.syncModels().then(() => {
+        if (this.active && this.timer === undefined) this.startTimer()
+      })
+    }, delay)
     this.timer.unref?.()
   }
 
   stopTimer(): void {
     if (this.timer === undefined) return
-    clearInterval(this.timer)
+    clearTimeout(this.timer)
     this.timer = undefined
   }
 
@@ -701,6 +748,8 @@ export class CpaController {
         this.active = false
         this.activeMode = undefined
         this.managementKey = undefined
+        this.stopTimer()
+        this.resetModelSync()
         this.models = []
         if (this.registration !== undefined) {
           this.registration()

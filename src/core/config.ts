@@ -405,11 +405,19 @@ export function normalizeModels(data: readonly JsonValue[]): CpaModel[] {
   return sortModels(models)
 }
 
-export async function fetchModels(baseURL: string, apiKey: string, timeoutMs = 10_000): Promise<CpaModel[]> {
+export async function fetchModels(
+  baseURL: string,
+  apiKey: string,
+  timeoutMs = 10_000,
+  signal?: AbortSignal,
+): Promise<CpaModel[]> {
   const controller = new AbortController()
   const timer = setTimeout(() => {
     controller.abort(new Error('model sync timed out'))
   }, timeoutMs)
+  const forwardAbort = () => controller.abort(signal?.reason)
+  if (signal?.aborted) forwardAbort()
+  else signal?.addEventListener('abort', forwardAbort, { once: true })
   try {
     const headers: Record<string, string> = apiKey
       ? { accept: 'application/json', authorization: `Bearer ${apiKey}` }
@@ -440,6 +448,7 @@ export async function fetchModels(baseURL: string, apiKey: string, timeoutMs = 1
     return models
   } finally {
     clearTimeout(timer)
+    signal?.removeEventListener('abort', forwardAbort)
   }
 }
 

@@ -43,8 +43,10 @@ import {
 } from './src/server/management.js'
 import { CpaDataService } from './src/server/data.js'
 import {
+  CpaController,
   cpaSettingsEqual,
   mergeCpaSettings,
+  modelSyncRetryDelay,
   resolveInitialCpaSettings,
 } from './src/server/runtime.js'
 import {
@@ -182,6 +184,64 @@ test('fetchModels requests the CPA rich model catalog', async () => {
       { id: 'raw-model' },
     ])
   } finally {
+    await new Promise(resolve => server.close(resolve))
+  }
+})
+
+test('modelSyncRetryDelay backs off exponentially up to the refresh interval', () => {
+  assert.deepEqual([1, 2, 3, 4, 10].map(n => modelSyncRetryDelay(n, 20_000)), [
+    3_000, 6_000, 12_000, 20_000, 20_000,
+  ])
+})
+
+test('model sync keeps the last catalog on failure and ignores superseded results', async () => {
+  const warnings = []
+  let handler = (_req, res) => res.end(JSON.stringify({ models: [{ slug: 'first' }] }))
+  const server = createServer((req, res) => handler(req, res))
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const baseURL = `http://127.0.0.1:${server.address().port}/v1`
+  const controller = new CpaController({
+    get: () => undefined,
+    logger: { warn: message => warnings.push(String(message)) },
+    llm: { registerAdapter: () => () => {} },
+    effect: () => {},
+  }, resolveOptions({}), sanitizeCpaSettings({
+    mode: 'external',
+    externalUrl: baseURL,
+    externalApiKey: 'sk-test',
+  }))
+  const modelIds = async () => (await controller.diagnostics()).models.map(model => model.id)
+  try {
+    await controller.applySettings(sanitizeCpaSettings({
+      mode: 'external',
+      externalUrl: baseURL,
+      externalApiKey: 'sk-test',
+    }))
+    assert.deepEqual(await modelIds(), ['first'])
+
+    handler = (_req, res) => {
+      res.writeHead(500)
+      res.end()
+    }
+    assert.equal(await controller.syncModels(), false)
+    assert.equal(await controller.syncModels(), false)
+    assert.deepEqual(await modelIds(), ['first'])
+    assert.equal(warnings.filter(message => message.includes('model sync failed')).length, 1)
+
+    let releaseSlow
+    handler = (_req, res) => {
+      releaseSlow = () => res.end(JSON.stringify({ models: [{ slug: 'stale' }] }))
+    }
+    const slow = controller.syncModels()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    handler = (_req, res) => res.end(JSON.stringify({ models: [{ slug: 'fresh' }] }))
+    assert.equal(await controller.syncModels(), true)
+    releaseSlow?.()
+    assert.equal(await slow, false)
+    assert.deepEqual(await modelIds(), ['fresh'])
+  } finally {
+    await controller.stopRuntime()
+    server.closeAllConnections()
     await new Promise(resolve => server.close(resolve))
   }
 })
