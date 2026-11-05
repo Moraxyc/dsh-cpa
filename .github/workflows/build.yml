@@ -5,8 +5,9 @@ on:
         paths: &build_paths
             - ".github/workflows/build.yml"
             - "src/**"
-            - "test.js"
+            - "tests/**"
             - "tsconfig.json"
+            - "tsconfig.test.json"
             - "oxlint.config.ts"
             - "tools/oxlint/**"
             - "package.json"

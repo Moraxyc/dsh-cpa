@@ -4,6 +4,8 @@ import { defineConfig } from "oxlint";
 const ANTI_SLOP_PLUGIN = "./tools/oxlint/anti-slop/index.ts";
 const antiSlopAvailable = existsSync(ANTI_SLOP_PLUGIN);
 
+type OxlintRules = NonNullable<Parameters<typeof defineConfig>[0]["rules"]>;
+
 const antiSlopRules = {
   "anti-slop/no-chained-type-assertions": "error",
   "anti-slop/no-conditional-empty-object-spread": "error",
@@ -20,7 +22,7 @@ const antiSlopRules = {
   "anti-slop/no-unsafe-dictionary-type": "error",
   "anti-slop/no-widen-then-assert": "error",
   "anti-slop/require-safety-comment-for-type-assertion": "error",
-} as const;
+} satisfies OxlintRules;
 
 export default defineConfig({
   ignorePatterns: [
@@ -37,7 +39,6 @@ export default defineConfig({
     ".windsurf/**",
     "tools/oxlint/anti-slop/**",
     "src/**/*.js",
-    "test.js",
   ],
   jsPlugins: antiSlopAvailable
     ? [{ name: "anti-slop", specifier: ANTI_SLOP_PLUGIN }]
