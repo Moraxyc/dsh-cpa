@@ -218,6 +218,51 @@ describe('core/adapter', () => {
     assert.equal(resolved.description, 'deepseek-r1')
   })
 
+  it('listModels qualifies catalog models that share a display name', async () => {
+    const models = normalizeModels([
+      { slug: 'gpt-6.1-sol', display_name: 'GPT 6.1 Sol' },
+      { slug: 'openai/gpt-6.1-sol', display_name: 'GPT 6.1 Sol' },
+      { slug: 'openrouter/gpt-6.1-sol', display_name: 'GPT 6.1 Sol' },
+      { slug: 'gpt-6.1-terra', display_name: 'GPT 6.1 Terra' },
+    ])
+    const adapter = makeAdapter({ getModels: () => models })
+
+    const listed = await adapter.listModels('cpa')
+    const names = new Map(listed.map(model => [model.id, model.name]))
+    assert.equal(names.get('gpt-6.1-sol'), 'GPT 6.1 Sol')
+    assert.equal(names.get('openai/gpt-6.1-sol'), 'GPT 6.1 Sol (openai)')
+    assert.equal(names.get('openrouter/gpt-6.1-sol'), 'GPT 6.1 Sol (openrouter)')
+    assert.equal(names.get('gpt-6.1-terra'), 'GPT 6.1 Terra')
+    assert.equal(listed.find(model => model.id === 'openai/gpt-6.1-sol')?.description, 'openai/gpt-6.1-sol')
+
+    const resolved = await adapter.resolveModel('cpa', 'openai/gpt-6.1-sol', new AbortController().signal)
+    assert.equal(resolved.name, 'GPT 6.1 Sol (openai)')
+  })
+
+  it('listModels keeps a display name that already names its route', async () => {
+    const models = normalizeModels([
+      { slug: 'openai/gpt-6-terra', display_name: 'openai/gpt-6-terra' },
+      { slug: 'openrouter/openai/gpt-6-terra', display_name: 'openai/gpt-6-terra' },
+    ])
+    const adapter = makeAdapter({ getModels: () => models })
+
+    const listed = await adapter.listModels('cpa')
+    const names = new Map(listed.map(model => [model.id, model.name]))
+    assert.equal(names.get('openai/gpt-6-terra'), 'openai/gpt-6-terra')
+    assert.equal(names.get('openrouter/openai/gpt-6-terra'), 'openai/gpt-6-terra (openrouter/openai)')
+  })
+
+  it('listModels falls back to the model id when names cannot be qualified', async () => {
+    const models = normalizeModels([
+      { slug: 'first', display_name: 'Same Name' },
+      { slug: 'second', display_name: 'Same Name' },
+    ])
+    const adapter = makeAdapter({ getModels: () => models })
+
+    const listed = await adapter.listModels('cpa')
+    assert.deepEqual(listed.map(model => model.name), ['Same Name (first)', 'Same Name (second)'])
+  })
+
   it('captures CPA trace metadata from a successful stream', async () => {
     const server = await startServer((_req, res) => {
       res.writeHead(200, {

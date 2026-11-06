@@ -274,8 +274,51 @@ function httpErrorCode(status: number, detail: string): string {
   return `HTTP_${status}`
 }
 
-function modelInfo(provider: string, model: CpaModel): LlmModelInfo {
-  const name = model.displayName ?? model.id
+function routePrefix(id: string): string {
+  const slash = id.lastIndexOf('/')
+  return slash > 0 ? id.slice(0, slash) : ''
+}
+
+/**
+ * Selector names for the synced catalog. CPA lists one model under several ids
+ * (a bare alias and provider-qualified routes) that share a display name, while
+ * DSH selectors render only the name, so colliding names carry their route.
+ */
+function modelNames(models: readonly CpaModel[]): Map<string, string> {
+  const groups = new Map<string, CpaModel[]>()
+  for (const model of models) {
+    const label = model.displayName ?? model.id
+    const group = groups.get(label)
+    if (group === undefined) groups.set(label, [model])
+    else group.push(model)
+  }
+  const names = new Map<string, string>()
+  const claimed = new Set<string>()
+  for (const [label, group] of groups) {
+    const model = group[0]
+    if (group.length !== 1 || model === undefined) continue
+    names.set(model.id, label)
+    claimed.add(label)
+  }
+  for (const [label, group] of groups) {
+    if (group.length < 2) continue
+    const qualified = group.map(model => {
+      const prefix = routePrefix(model.id)
+      const redundant = prefix === '' || label.startsWith(`${prefix}/`)
+      return { model, name: redundant ? label : `${label} (${prefix})` }
+    })
+    const distinct = new Set(qualified.map(entry => entry.name)).size === qualified.length
+    const free = qualified.every(entry => !claimed.has(entry.name))
+    for (const { model, name } of qualified) {
+      const selected = distinct && free ? name : `${label} (${model.id})`
+      names.set(model.id, selected)
+      claimed.add(selected)
+    }
+  }
+  return names
+}
+
+function modelInfo(provider: string, model: CpaModel, name = model.displayName ?? model.id): LlmModelInfo {
   const info: LlmModelInfo = {
     provider,
     id: model.id,
@@ -662,14 +705,17 @@ export class CpaAdapter extends LlmAdapter {
   }
 
   override listModels(provider: string): Promise<readonly LlmModelInfo[]> {
-    return Promise.resolve(this.options.getModels().map(model => modelInfo(provider, model)))
+    const models = this.options.getModels()
+    const names = modelNames(models)
+    return Promise.resolve(models.map(model => modelInfo(provider, model, names.get(model.id))))
   }
 
   override resolveModel(provider: string, model: string, _signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
-    const configured = this.options.getModels().find(entry => entry.id === model)
+    const models = this.options.getModels()
+    const configured = models.find(entry => entry.id === model)
     const resolved: LlmResolvedModelInfo = configured === undefined
       ? { provider, id: model, name: model, inputModalities: ['text'] }
-      : modelInfo(provider, configured)
+      : modelInfo(provider, configured, modelNames(models).get(configured.id))
     resolved.context = {
       contextWindow: configured?.contextLength ?? this.options.defaultContextWindow,
     }
