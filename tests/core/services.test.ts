@@ -9,8 +9,8 @@ import {
   CpaExecutionStore,
   sanitizeExecutionRecord,
   simpleProjectionSchema,
-} from '../../src/core/services.js'
-import type { ExecutionInput } from '../../src/core/services.js'
+} from '../../lib/core/services.js'
+import type { ExecutionInput } from '../../lib/core/services.js'
 
 describe('core/services', () => {
   it('CpaExecutionStore persists sanitized records, reloads them, and summarizes local usage', async () => {

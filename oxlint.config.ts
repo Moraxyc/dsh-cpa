@@ -37,8 +37,9 @@ export default defineConfig({
     ".pi/**",
     ".roo/**",
     ".windsurf/**",
+    "lib/**",
+    ".tmp/**",
     "tools/oxlint/anti-slop/**",
-    "src/**/*.js",
   ],
   jsPlugins: antiSlopAvailable
     ? [{ name: "anti-slop", specifier: ANTI_SLOP_PLUGIN }]

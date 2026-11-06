@@ -1,10 +1,10 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
-import type { CpaSettings } from '../src/core/config.js'
-import type { JsonRecord } from '../src/core/json.js'
-import { migrateLegacySettings } from '../src/index.js'
-import type { CpaRuntimeContext } from '../src/server/runtime.js'
+import type { CpaSettings } from '../lib/core/config.js'
+import type { JsonRecord } from '../lib/core/json.js'
+import { migrateLegacySettings } from '../lib/index.js'
+import type { CpaRuntimeContext } from '../lib/server/runtime.js'
 
 /** The slice of the host profile-settings service that legacy migration calls. */
 interface ProfileSettingsStub {

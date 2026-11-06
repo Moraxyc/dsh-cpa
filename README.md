@@ -29,17 +29,24 @@ npx @deepseek-ai/dsh plugin --profile headless add dsh-cpa
 
 ## 从源码安装
 
-开发或本地构建时使用：
+`src/**/*.ts` 是源码，`lib/` 是构建产物。首次安装或修改源码后先构建：
 
 ```sh
+npm run build
 npx @deepseek-ai/dsh plugin --profile web add .
 ```
 
 headless profile 同理：
 
 ```sh
+npm run build
 npx @deepseek-ai/dsh plugin --profile headless add .
 ```
+
+`npm run build` 会先由 `tsc` 把 `src` 的 Server 端 TypeScript 编译到
+`lib/`，再由 esbuild 把 `src/client/` 的模块打包成单个 `lib/client.js`。
+`npm run check` 会依次构建、类型检查和 lint；`npm test` 会在构建后运行
+`lib/` 的测试。
 
 ## 使用已有 CPA
 

@@ -8,7 +8,7 @@ import {
   normalizeGeminiWindows,
   normalizeQuotaReport,
   sanitizeAuthFiles,
-} from '../../src/server/quota.js'
+} from '../../lib/server/quota.js'
 import { makeIdToken } from '../helpers/fixtures.ts'
 import { sendJson, startServer } from '../helpers/http.ts'
 

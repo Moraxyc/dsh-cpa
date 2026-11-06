@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { CpaDataService } from '../../src/server/data.js'
+import { CpaDataService } from '../../lib/server/data.js'
 import { makeIdToken } from '../helpers/fixtures.ts'
 import { sendJson, startServer } from '../helpers/http.ts'
 

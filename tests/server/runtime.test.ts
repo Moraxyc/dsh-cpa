@@ -2,15 +2,15 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import type { ServerResponse } from 'node:http'
 
-import { resolveOptions, sanitizeCpaSettings } from '../../src/core/config.js'
-import type { CpaSettings } from '../../src/core/config.js'
+import { resolveOptions, sanitizeCpaSettings } from '../../lib/core/config.js'
+import type { CpaSettings } from '../../lib/core/config.js'
 import {
   CpaController,
   cpaSettingsEqual,
   mergeCpaSettings,
   modelSyncRetryDelay,
   resolveInitialCpaSettings,
-} from '../../src/server/runtime.js'
+} from '../../lib/server/runtime.js'
 import { DEFAULT_ADVANCED_SETTINGS } from '../helpers/fixtures.ts'
 import { sendJson, startServer } from '../helpers/http.ts'
 

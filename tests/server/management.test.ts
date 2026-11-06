@@ -1,8 +1,8 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
-import type { ExecutionRecord } from '../../src/core/services.js'
-import type { CpaRoutePlan, CpaRouteOptions } from '../../src/core/router.js'
+import type { ExecutionRecord } from '../../lib/core/services.js'
+import type { CpaRoutePlan, CpaRouteOptions } from '../../lib/core/router.js'
 import {
   cpaRoot,
   EXECUTION_STATUS_PATH,
@@ -11,11 +11,11 @@ import {
   PANEL_PATH,
   PREFLIGHT_PATH,
   SUMMARY_PATH,
-} from '../../src/server/management.js'
-import type { ManagementWebScope } from '../../src/server/management.js'
-import { emptyCpaSummary } from '../../src/server/data.js'
-import { normalizeQuotaReport, sanitizeAuthFiles } from '../../src/server/quota.js'
-import type { CpaQuotaReport } from '../../src/server/quota.js'
+} from '../../lib/server/management.js'
+import type { ManagementWebScope } from '../../lib/server/management.js'
+import { emptyCpaSummary } from '../../lib/server/data.js'
+import { normalizeQuotaReport, sanitizeAuthFiles } from '../../lib/server/quota.js'
+import type { CpaQuotaReport } from '../../lib/server/quota.js'
 import { readJson, startServer } from '../helpers/http.ts'
 import {
   createCarrierScope,

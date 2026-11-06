@@ -17,21 +17,23 @@
   "license": "MIT",
   "type": "module",
   "exports": {
-    ".": "./src/index.js",
-    "./client": "./src/client.js",
-    "./src/*": "./src/*",
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
-  "main": "./src/index.js",
+  "main": "./lib/index.js",
   "files": [
-    "src/**/*.js",
+    "lib/**/*.js",
+    "lib/**/*.d.ts",
     "cordis.patch.yml",
     "README.md",
     "README.en.md"
   ],
   "scripts": {
-    "check": "tsc --noEmit && tsc -p tsconfig.test.json && oxlint",
-    "build": "tsc",
+    "check": "npm run build && tsc -p tsconfig.client.json && tsc -p tsconfig.test.json && oxlint",
+    "build": "npm run build:server && npm run build:client",
+    "build:server": "tsc -p tsconfig.build.json",
+    "build:client": "node scripts/build-client.mjs",
     "prepack": "npm run build",
     "pretest": "npm run build",
     "test": "node --test \"tests/**/*.test.ts\""
@@ -61,10 +63,12 @@
     "@oxlint/plugins": "^1.91.0",
     "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
+    "esbuild": "^0.28.2",
     "oxlint": "^1.91.0",
     "typescript": "^7.0.2"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "3.19.0"
-  }
+  },
+  "types": "./lib/index.d.ts"
 }

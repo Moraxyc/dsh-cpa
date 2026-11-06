@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": [
+      "es2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "rootDir": "src"
+  },
+  "include": [
+    "src/client/**/*.ts",
+    "src/client/**/*.d.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "tools"
+  ]
+}

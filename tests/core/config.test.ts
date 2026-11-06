@@ -18,8 +18,8 @@ import {
   resolveOptions,
   sanitizeCpaSettings,
   writeCpaSettings,
-} from '../../src/core/config.js'
-import type { Config } from '../../src/core/config.js'
+} from '../../lib/core/config.js'
+import type { Config } from '../../lib/core/config.js'
 import { DEFAULT_ADVANCED_SETTINGS } from '../helpers/fixtures.ts'
 import { sendJson, startServer } from '../helpers/http.ts'
 

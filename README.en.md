@@ -31,17 +31,25 @@ npx @deepseek-ai/dsh plugin --profile headless add dsh-cpa
 
 ## Install From Source
 
-For development or local builds:
+`src/**/*.ts` is the source; `lib/` is generated. Build before the first
+install or after changing source:
 
 ```sh
+npm run build
 npx @deepseek-ai/dsh plugin --profile web add .
 ```
 
 Headless profile:
 
 ```sh
+npm run build
 npx @deepseek-ai/dsh plugin --profile headless add .
 ```
+
+`npm run build` compiles the Server-side TypeScript from `src` into `lib` with
+`tsc`, then bundles `src/client/` into a single `lib/client.js` with esbuild.
+`npm run check` builds, type-checks, and lints; `npm test` runs the tests
+against `lib` after building.
 
 ## Use An Existing CPA
 

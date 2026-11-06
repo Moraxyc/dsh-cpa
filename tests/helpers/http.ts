@@ -8,7 +8,7 @@ import type {
 } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
-import type { JsonValue } from '../../src/core/json.js'
+import type { JsonValue } from '../../lib/core/json.js'
 
 /** Loopback HTTP server on an ephemeral port, standing in for a CPA management API. */
 export interface TestServer {

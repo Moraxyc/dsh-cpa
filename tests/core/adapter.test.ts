@@ -20,7 +20,7 @@ import {
   cpaImageTarget,
   parseCpaTraceId,
   serializeMessages,
-} from '../../src/core/adapter.js'
+} from '../../lib/core/adapter.js'
 import type {
   CpaAdapterOptions,
   CpaExecutionEvent,
@@ -29,8 +29,8 @@ import type {
   WireContentPart,
   WireMessage,
   WireRequest,
-} from '../../src/core/adapter.js'
-import { normalizeModels } from '../../src/core/config.js'
+} from '../../lib/core/adapter.js'
+import { normalizeModels } from '../../lib/core/config.js'
 import { sessionId } from '../helpers/fixtures.ts'
 import { readText, sendJson, startServer } from '../helpers/http.ts'
 

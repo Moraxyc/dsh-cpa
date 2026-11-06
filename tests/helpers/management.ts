@@ -1,4 +1,4 @@
-import type { ManagementContext, ManagementWebScope } from '../../src/server/management.js'
+import type { ManagementContext, ManagementWebScope } from '../../lib/server/management.js'
 import { startServer } from './http.ts'
 import type { TestServer } from './http.ts'
 

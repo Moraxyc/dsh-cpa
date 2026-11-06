@@ -1,8 +1,8 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { planCpaRoute, selectCpaModels } from '../../src/core/router.js'
-import type { CpaRouteOptions, CpaRouteSnapshot } from '../../src/core/router.js'
+import { planCpaRoute, selectCpaModels } from '../../lib/core/router.js'
+import type { CpaRouteOptions, CpaRouteSnapshot } from '../../lib/core/router.js'
 
 const SMALL_REQUEST: CpaRouteOptions = {
   model: 'requested',

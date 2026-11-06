@@ -13,8 +13,9 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "noEmitOnError": true,
-    "rootDir": "."
+    "noEmit": true,
+    "rootDir": "src"
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "tools"]
+  "exclude": ["node_modules", "tools", "src/client/**"]
 }
