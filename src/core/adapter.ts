@@ -34,6 +34,8 @@ import type {
 import { chatCompletionsUrl } from './config.js'
 import type { CpaModel } from './config.js'
 import { isFunction, isJsonRecord, isNonEmptyString, isString } from './json.js'
+import { quotaObservationFromHeaders } from './quota-headers.js'
+import type { CpaQuotaObservation } from './quota-headers.js'
 import type { CpaRoutePlan, CpaPreflightResult } from './router.js'
 
 const DONE = '[DONE]'
@@ -76,6 +78,7 @@ export interface CpaExecutionEvent {
   fallbackFrom?: string
   fallbackReason?: string
   errorCode?: string
+  quota?: CpaQuotaObservation
 }
 
 type ImageRef = ImageBlock['attachment']
@@ -860,6 +863,7 @@ export class CpaAdapter extends LlmAdapter {
 
     if (!response.ok) {
       const trace = cpaTrace(response.headers)
+      const quota = quotaObservationFromHeaders(options.model, response.headers)
       let failure: unknown
       try {
         await readError(response)
@@ -872,13 +876,15 @@ export class CpaAdapter extends LlmAdapter {
         trace,
         'failure',
         errorCode(failure),
+        quota,
       ))
       throw failure
     }
     const trace = cpaTrace(response.headers)
+    const quota = quotaObservationFromHeaders(options.model, response.headers)
     if (!response.body) {
       const failure = new LlmError('empty response', 'EMPTY_RESPONSE')
-      await this.reportExecution(this.executionEvent(options, context, trace, 'failure', failure.code))
+      await this.reportExecution(this.executionEvent(options, context, trace, 'failure', failure.code, quota))
       throw failure
     }
 
@@ -904,6 +910,7 @@ export class CpaAdapter extends LlmAdapter {
         trace,
         completed ? 'success' : 'failure',
         failureCode,
+        quota,
       )
       if (executionUsage !== undefined) {
         execution.inputTokens = executionUsage.inputTokens
@@ -919,6 +926,7 @@ export class CpaAdapter extends LlmAdapter {
     trace: CpaTrace | undefined,
     outcome: CpaExecutionEvent['outcome'],
     failureCode: string | undefined,
+    quota?: CpaQuotaObservation,
   ): CpaExecutionEvent {
     const execution: CpaExecutionEvent = {
       sessionId: options.sessionId,
@@ -940,6 +948,7 @@ export class CpaAdapter extends LlmAdapter {
       execution.traceId = trace.traceId
       execution.requestId = trace.requestId
     }
+    if (quota !== undefined) execution.quota = quota
     return execution
   }
 

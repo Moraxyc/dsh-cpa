@@ -1,15 +1,21 @@
 import type * as React from 'react'
-import type { CpaAccountPublic, ExecutionRecord } from './wire.js'
+import type {
+  CpaAccountPublic,
+  ExecutionRecord,
+  QuotaObservation,
+  QuotaRisk,
+  QuotaWindow,
+} from './wire.js'
 import { clientRuntime } from './runtime.js'
 import {
-  accountCore,
   accountLabel,
   accountStatus,
   executionTimeline,
   fallbackReasonLabel,
   planLabel,
   positiveCount,
-  preferredWindow,
+  providerFamily,
+  providerFromModel,
   providerLabel,
   reportWindows,
   resolveAccount,
@@ -20,11 +26,28 @@ import {
 import type { AccountView, QuotaMap } from './format.js'
 
 export type ReadoutTone = '' | 'warn' | 'error'
+export type ReadoutMode = 'quota' | 'model'
+
+/** Show the weekly window only at or below this remaining percent. */
+export const WEEKLY_WINDOW_REVEAL_PERCENT = 20
+
+export interface ModelSelectionLike {
+  provider?: string
+  model?: string
+  reasoningEffort?: string
+}
+
+/** Wire view of the session's `modelSelection` projection. */
+export interface SessionModelSelection {
+  lastUsed: ModelSelectionLike | null
+  next: ModelSelectionLike | null
+}
 
 export interface ReadoutPresentation {
   account: AccountView | undefined
   full: string
   headline: string
+  mode: ReadoutMode
   primary: string
   secondary: string
   tone: ReadoutTone
@@ -42,107 +65,225 @@ export interface DetailGroup {
   rows: DetailRow[]
 }
 
-export function readoutAccount(
-  accounts: readonly CpaAccountPublic[],
-  execution: ExecutionRecord | null | undefined,
-): AccountView | undefined {
-  const resolved = resolveAccount(accounts, execution)
-  if (resolved !== undefined) return resolved
-  if (execution !== null && execution !== undefined) return undefined
-  return accounts.length === 1 ? accounts[0] : undefined
+export function activeSelection(selection: SessionModelSelection | undefined): ModelSelectionLike | undefined {
+  return selection?.next ?? selection?.lastUsed ?? undefined
 }
 
-export function readoutTone(
-  account: AccountView | undefined,
-  quota: QuotaMap | undefined,
-  execution: ExecutionRecord | null | undefined,
-): ReadoutTone {
-  if (execution?.outcome === 'failure' || execution?.preflightStatus === 'blocked') return 'error'
-  if (account !== undefined
-    && (account.disabled === true || account.unavailable === true || accountStatus(account) !== '')) {
-    return 'error'
+function toneRank(tone: ReadoutTone): number {
+  return tone === 'error' ? 2 : tone === 'warn' ? 1 : 0
+}
+
+function worstTone(...tones: ReadoutTone[]): ReadoutTone {
+  let worst: ReadoutTone = ''
+  for (const tone of tones) {
+    if (toneRank(tone) > toneRank(worst)) worst = tone
   }
-  const window = preferredWindow(reportWindows(quota, account?.authIndex))
-  if (window === undefined) return ''
+  return worst
+}
+
+function windowTone(window: QuotaWindow): ReadoutTone {
   const percent = windowPercent(window)
-  if (window.risk === 'critical' || (percent !== null && percent <= 0)) return 'error'
+  if (window.risk === 'critical' || window.exhausted || (percent !== null && percent <= 5)) return 'error'
   if (window.risk === 'warning' || (percent !== null && percent <= 20)) return 'warn'
   return ''
+}
+
+function accountRank(account: AccountView): number {
+  const unavailable = account.disabled === true
+    || account.unavailable === true
+    || accountStatus(account) !== ''
+  const rawPriority = Number(account.priority ?? 0)
+  const priority = Number.isFinite(rawPriority) ? rawPriority : 0
+  const success = positiveCount(account.success)
+  return (unavailable ? 0 : 1_000_000) + priority * 1_000 + Math.min(success, 999)
+}
+
+/**
+ * Pick the account this session is most likely using. A recorded execution
+ * names the serving account. Otherwise the model's provider family narrows the list,
+ * and accounts that report quota win.
+ */
+export function readoutAccount(
+  accounts: readonly CpaAccountPublic[],
+  quota: QuotaMap | undefined,
+  execution: ExecutionRecord | null | undefined,
+  model: string,
+): AccountView | undefined {
+  const resolved = resolveAccount(accounts, execution)
+  if (resolved?.authIndex !== undefined && resolved.authIndex !== '') return resolved
+  if (execution === null || execution === undefined) {
+    if (accounts.length === 1) return accounts[0]
+    return familyAccount(accounts, quota, model)
+  }
+  return familyAccount(accounts, quota, model) ?? resolved
+}
+
+function familyAccount(
+  accounts: readonly CpaAccountPublic[],
+  quota: QuotaMap | undefined,
+  model: string,
+): AccountView | undefined {
+  const family = providerFamily(providerFromModel(model))
+  if (family === '') return undefined
+  const candidates = accounts.filter(account => providerFamily(account.provider) === family)
+  if (candidates.length === 0) return undefined
+  const usable = candidates.filter(account => account.disabled !== true
+    && account.unavailable !== true
+    && accountStatus(account) === '')
+  const pool = usable.length > 0 ? usable : candidates
+  const withQuota = pool.filter(account => reportWindows(quota, account.authIndex).length > 0)
+  const preferred = withQuota.length > 0 ? withQuota : pool
+  return [...preferred].sort((left, right) => accountRank(right) - accountRank(left))[0]
+}
+
+/** Currently used quota windows: 5h always, 7d only while it is low. */
+export function displayedQuotaWindows(windows: readonly QuotaWindow[]): QuotaWindow[] {
+  const valued = windows.filter(window => windowPercent(window) !== null)
+  if (valued.length === 0) return []
+  const fiveHour = valued.find(window => window.id === 'code-5h' || window.label === '5h')
+  const weekly = valued.find(window => window.id === 'code-7d' || window.label === '7d')
+  if (fiveHour !== undefined || weekly !== undefined) {
+    const primary = fiveHour ?? weekly
+    if (primary === undefined) return []
+    const weeklyPercent = windowPercent(weekly)
+    const revealWeekly = weekly !== undefined
+      && weekly !== primary
+      && weeklyPercent !== null
+      && weeklyPercent <= WEEKLY_WINDOW_REVEAL_PERCENT
+    return revealWeekly ? [primary, weekly] : [primary]
+  }
+  let tightest: QuotaWindow | undefined
+  for (const window of valued) {
+    const percent = windowPercent(window)
+    if (percent === null) continue
+    const current = windowPercent(tightest)
+    if (tightest === undefined || current === null || percent < current) tightest = window
+  }
+  return tightest === undefined ? [] : [tightest]
+}
+
+export function windowReading(window: QuotaWindow): string {
+  const percent = windowPercent(window)
+  if (percent === null) return ''
+  return `${shortWindowLabel(window.label)} ${Math.round(percent)}%`
+}
+
+function shortWindowLabel(label: string): string {
+  const trimmed = label.trim()
+  if (trimmed === '') return '额度'
+  return trimmed.replace(/^Gemini\s+/i, '').replace(/\s+Series$/i, '') || trimmed
+}
+
+function quotaRisk(percent: number): QuotaRisk {
+  if (percent <= 5) return 'critical'
+  if (percent <= 20) return 'warning'
+  return 'normal'
+}
+
+function observedResetLabel(resetAt: number | undefined): string {
+  if (resetAt === undefined || !Number.isFinite(resetAt)) return ''
+  const date = new Date(resetAt)
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+/** Turn response-header observations into display windows, dropping resets already past. */
+export function observationWindows(
+  observation: QuotaObservation | undefined,
+  now = Date.now(),
+): QuotaWindow[] {
+  if (observation === undefined) return []
+  const windows: QuotaWindow[] = []
+  for (const window of observation.windows) {
+    if (window.resetAt !== undefined && window.resetAt <= now) continue
+    const percent = Math.min(100, Math.max(0, window.remainingPercent))
+    windows.push({
+      id: window.id,
+      label: window.label,
+      remainingPercent: percent,
+      resetLabel: observedResetLabel(window.resetAt),
+      exhausted: percent <= 0,
+      risk: quotaRisk(percent),
+    })
+  }
+  return windows
+}
+
+/**
+ * Response headers describe the account that just served a request, so they
+ * win while they are newer than the management snapshot and still in-window.
+ */
+export function currentQuotaWindows(
+  execution: ExecutionRecord | null | undefined,
+  quota: QuotaMap | undefined,
+  authIndex: string | undefined,
+  now = Date.now(),
+): readonly QuotaWindow[] {
+  const observed = observationWindows(execution?.quota, now)
+  const report = reportWindows(quota, authIndex)
+  if (observed.length === 0) return report
+  if (report.length === 0) return observed
+  const observedAt = execution?.quota?.observedAt ?? 0
+  const reportAt = Date.parse(quota?.[authIndex ?? '']?.refreshedAt ?? '')
+  return Number.isFinite(reportAt) && reportAt > observedAt ? report : observed
 }
 
 export function readoutPresentation(
   accounts: readonly CpaAccountPublic[],
   quota: QuotaMap | undefined,
   execution: ExecutionRecord | null | undefined,
+  selection: SessionModelSelection | undefined,
 ): ReadoutPresentation {
-  const account = readoutAccount(accounts, execution)
-  const provider = providerLabel(account?.provider) || providerLabel(execution?.provider)
-  const plan = planLabel(account)
-  const label = accountLabel(account)
+  const chosen = activeSelection(selection)
+  const selectedModel = chosen?.model?.trim() ?? ''
+  const model = selectedModel !== '' ? selectedModel : execution?.model?.trim() ?? ''
+  const account = readoutAccount(accounts, quota, execution, model)
+  const windows = displayedQuotaWindows(currentQuotaWindows(execution, quota, account?.authIndex))
+  const mode: ReadoutMode = windows.length > 0 ? 'quota' : 'model'
+  const primary = windows[0] === undefined ? model : windowReading(windows[0])
+  const secondary = windows[1] === undefined ? '' : windowReading(windows[1])
   const status = accountStatus(account)
-  let primary = [provider, plan].filter(Boolean).join(' ')
-  if (primary === '' && execution !== null && execution !== undefined && execution.model !== '') {
-    primary = execution.model
+  const failed = execution?.outcome === 'failure' || execution?.preflightStatus === 'blocked'
+  const tone = worstTone(
+    failed ? 'error' : '',
+    status !== '' ? 'error' : '',
+    ...windows.map(windowTone),
+  )
+  const fullParts: string[] = []
+  if (mode === 'quota') {
+    for (const window of windows) {
+      const percent = windowPercent(window)
+      fullParts.push(`${window.label === '' ? '额度' : window.label} 剩余 ${Math.round(percent ?? 0)}%`)
+    }
+  } else if (model !== '') {
+    fullParts.push(`模型 ${model}`)
   }
-  if (primary === '') {
-    primary = accounts.length > 1 ? `${accounts.length} 账号` : 'CPA'
-  }
-  const window = preferredWindow(reportWindows(quota, account?.authIndex))
-  const percent = windowPercent(window)
-  const quotaText = window !== undefined && percent !== null
-    ? `${window.label} ${Math.round(percent)}%`
-    : ''
-  let secondary = ''
-  if (execution?.outcome === 'failure') {
-    secondary = '失败'
-  } else if (status !== '') {
-    secondary = status
-  } else if (execution?.fallbackFrom !== undefined && execution.fallbackFrom !== '') {
-    secondary = '已切换'
-  } else if (quotaText !== '') {
-    secondary = quotaText
-  } else if (execution === null || execution === undefined) {
-    const unavailable = accounts.filter(item => item.unavailable).length
-    const disabled = accounts.filter(item => item.disabled).length
-    secondary = [
-      unavailable > 0 ? `${unavailable} 不可用` : '',
-      disabled > 0 ? `${disabled} 停用` : '',
-    ].filter(Boolean).join(' · ')
-  }
-  const failed = Math.max(positiveCount(account?.failed), execution?.outcome === 'failure' ? 1 : 0)
-  const fullParts = ['CPA']
-  if (primary !== 'CPA') fullParts.push(primary)
-  if (secondary !== '') fullParts.push(secondary)
-  if (quotaText !== '' && !fullParts.includes(quotaText)) fullParts.push(quotaText)
-  if (label !== '' && label !== primary && !fullParts.includes(label)) fullParts.push(label)
-  if (status !== '' && secondary !== status) fullParts.push(status)
-  if (failed > 0 && !fullParts.some(part => part.includes('失败'))) fullParts.push(`失败 ${failed}`)
-  if (execution?.fallbackFrom !== undefined && execution.fallbackFrom !== '' && !secondary.includes('切换')) {
+  if (status !== '') fullParts.push(status)
+  if (failed) fullParts.push('最近请求失败')
+  if (execution?.fallbackFrom !== undefined && execution.fallbackFrom !== '') {
     fullParts.push(`已切换至 ${execution.model === '' ? '未知模型' : execution.model}`)
   }
   return {
     account,
     full: fullParts.join(' · '),
-    headline: quotaText !== '' ? quotaText : secondary,
+    headline: [primary, secondary].filter(Boolean).join(' · '),
+    mode,
     primary,
     secondary,
-    tone: readoutTone(account, quota, execution),
+    tone,
   }
 }
 
-export function quotaDetailRows(quota: QuotaMap | undefined, authIndex: string | undefined): DetailRow[] {
+export function quotaDetailRows(windows: readonly QuotaWindow[]): DetailRow[] {
   const rows: DetailRow[] = []
-  for (const window of reportWindows(quota, authIndex)) {
+  for (const window of windows) {
     const percent = windowPercent(window)
     if (percent === null) continue
     const reset = window.resetLabel !== '' ? ` · 重置 ${window.resetLabel}` : ''
-    const tone: ReadoutTone = window.risk === 'critical' || percent <= 0
-      ? 'error'
-      : window.risk === 'warning' || percent <= 20 ? 'warn' : ''
     rows.push({
-      label: window.label === '' ? '额度' : `额度 ${window.label}`,
+      label: window.label === '' ? '额度' : window.label,
       value: `${Math.round(percent)}%${reset}`,
-      tone,
+      tone: windowTone(window),
     })
   }
   return rows
@@ -150,7 +291,6 @@ export function quotaDetailRows(quota: QuotaMap | undefined, authIndex: string |
 
 export function accountDetailRows(
   account: AccountView,
-  quota: QuotaMap | undefined,
   execution: ExecutionRecord | null | undefined,
 ): DetailRow[] {
   const rows: DetailRow[] = []
@@ -168,7 +308,6 @@ export function accountDetailRows(
   if (success > 0 || failed > 0) {
     rows.push({ label: '账号用量', value: `成功 ${success} · 失败 ${failed}` })
   }
-  rows.push(...quotaDetailRows(quota, account.authIndex))
   const source = sourceLabel(account)
   if (source !== '') rows.push({ label: '来源', value: source })
   if (account.authIndex !== undefined && account.authIndex !== '') {
@@ -198,32 +337,6 @@ export function accountDetailRows(
   }
   if (account.note !== undefined && account.note !== '') {
     rows.push({ label: '备注', value: account.note, wide: true })
-  }
-  return rows
-}
-
-export function accountsDetailRows(
-  accounts: readonly CpaAccountPublic[],
-  quota: QuotaMap | undefined,
-): DetailRow[] {
-  const rows: DetailRow[] = []
-  for (const [index, account] of accounts.entries()) {
-    const label = accountLabel(account) || `账号 ${index + 1}`
-    const core = accountCore(account)
-    rows.push({ label, value: core === '' ? '—' : core, wide: label.length > 24 })
-    const quotaRows = quotaDetailRows(quota, account.authIndex)
-    if (quotaRows.length > 0) {
-      rows.push({
-        label: '额度',
-        value: quotaRows
-          .map(row => `${row.label.replace(/^额度\s*/u, '')} ${String(row.value)}`.trim())
-          .join(' · '),
-        tone: quotaRows.some(row => row.tone === 'error')
-          ? 'error'
-          : quotaRows.some(row => row.tone === 'warn') ? 'warn' : '',
-        wide: true,
-      })
-    }
   }
   return rows
 }
@@ -313,14 +426,16 @@ export function detailGroups(
   quota: QuotaMap | undefined,
   execution: ExecutionRecord | null | undefined,
   executions: readonly ExecutionRecord[] | undefined,
+  selection: SessionModelSelection | undefined,
 ): DetailGroup[] {
   const groups: DetailGroup[] = []
-  const account = readoutAccount(accounts, execution)
+  const chosen = activeSelection(selection)
+  const model = chosen?.model?.trim() || execution?.model?.trim() || ''
+  const account = readoutAccount(accounts, quota, execution, model)
+  const quotaRows = quotaDetailRows(currentQuotaWindows(execution, quota, account?.authIndex))
+  if (quotaRows.length > 0) groups.push({ title: '额度', rows: quotaRows })
   if (account !== undefined) {
-    const rows = accountDetailRows(account, quota, execution)
-    if (rows.length > 0) groups.push({ title: '账号', rows })
-  } else if (execution === null || execution === undefined) {
-    const rows = accountsDetailRows(accounts, quota)
+    const rows = accountDetailRows(account, execution)
     if (rows.length > 0) groups.push({ title: '账号', rows })
   }
   if (execution !== null && execution !== undefined) {

@@ -121,6 +121,24 @@ describe('core/services', () => {
 
       assert.equal(sanitizeExecutionRecord({ time: 1 }), undefined)
       assert.equal(sanitizeExecutionRecord(null), undefined)
+      const withQuota = sanitizeExecutionRecord({
+        authIndex: 'auth-quota',
+        sessionId: 's-quota',
+        time: 1,
+        quota: {
+          provider: 'codex',
+          observedAt: 2,
+          windows: [
+            { id: 'code-5h', label: '5h', remainingPercent: 25, resetAt: 3 },
+            { id: '', label: 'dropped', remainingPercent: 10 },
+          ],
+        },
+      })
+      assert.deepEqual(withQuota?.quota, {
+        provider: 'codex',
+        observedAt: 2,
+        windows: [{ id: 'code-5h', label: '5h', remainingPercent: 25, resetAt: 3 }],
+      })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

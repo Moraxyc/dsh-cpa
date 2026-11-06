@@ -127,6 +127,19 @@ export interface CpaModel {
   inputModalities?: string[]
 }
 
+export interface QuotaObservationWindow {
+  id: string
+  label: string
+  remainingPercent: number
+  resetAt?: number
+}
+
+export interface QuotaObservation {
+  provider: string
+  windows: QuotaObservationWindow[]
+  observedAt: number
+}
+
 export interface ExecutionRecord {
   authIndex?: string
   sessionId?: string
@@ -147,6 +160,7 @@ export interface ExecutionRecord {
   fallbackFrom?: string
   fallbackReason?: string
   errorCode?: string
+  quota?: QuotaObservation
 }
 
 export interface CpaDiagnosticCheck {

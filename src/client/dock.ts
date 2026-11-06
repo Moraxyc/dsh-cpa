@@ -2,8 +2,8 @@ import type * as React from 'react'
 import type { CpaAccountPublic, ExecutionRecord } from './wire.js'
 import { fetchExecutionStatus, READOUT_REFRESH_MS } from './api.js'
 import type { ExecutionStatusResponse } from './api.js'
-import { detailGroups, readoutPresentation } from './readout.js'
-import type { DetailGroup } from './readout.js'
+import { activeSelection, detailGroups, readoutPresentation } from './readout.js'
+import type { DetailGroup, SessionModelSelection } from './readout.js'
 import { clientRuntime } from './runtime.js'
 
 const DIALOG_GAP = 8
@@ -18,9 +18,15 @@ export interface CpaDockProps {
 function shouldShowReadout(
   readout: ExecutionStatusResponse | null,
   execution: ExecutionRecord | null | undefined,
+  selection: SessionModelSelection | undefined,
 ): boolean {
-  if (readout === null || readout.available === false) return false
-  return readout.accounts.length > 0 || (execution !== null && execution !== undefined)
+  if (readout === null) return false
+  const chosen = activeSelection(selection)
+  if (readout.route !== undefined && chosen !== undefined && chosen.provider !== readout.route) {
+    return false
+  }
+  if (execution !== null && execution !== undefined) return true
+  return readout.accounts.length > 0
 }
 
 interface ReadoutDialogState {
@@ -81,6 +87,7 @@ function DetailSection({ group, showTitle }: { group: DetailGroup; showTitle: bo
 export function CpaDock(props: CpaDockProps): React.ReactElement | null {
   const { React, primitives, ReactDOM } = clientRuntime()
   const projection = props.useProjection<ExecutionRecord | null>('cpaUsage')
+  const selection = props.useProjection<SessionModelSelection>('modelSelection')
   const [readout, setReadout] = React.useState<ExecutionStatusResponse | null>(null)
   const { anchorRef, open, panelRef, position, setOpen } = useReadoutDialog()
 
@@ -107,11 +114,17 @@ export function CpaDock(props: CpaDockProps): React.ReactElement | null {
 
   const execution = projection ?? readout?.execution
   const accounts: readonly CpaAccountPublic[] = readout?.accounts ?? []
-  const visible = shouldShowReadout(readout, execution)
-  const presentation = visible ? readoutPresentation(accounts, readout?.quota, execution) : null
-  const shown = presentation !== null && presentation.full !== 'CPA'
+  const visible = shouldShowReadout(readout, execution, selection)
+  const presentation = visible ? readoutPresentation(accounts, readout?.quota, execution, selection) : null
+  // An older Host omits `route`. Without an execution, only a model that resolved
+  // to a CPA account proves the session is on CPA.
+  const shown = presentation !== null
+    && presentation.primary !== ''
+    && (execution !== null && execution !== undefined
+      || readout?.route !== undefined
+      || presentation.account !== undefined)
   const groups = presentation !== null && shown
-    ? detailGroups(accounts, readout?.quota, execution, readout?.executions)
+    ? detailGroups(accounts, readout?.quota, execution, readout?.executions, selection)
     : []
 
   React.useEffect(() => {
@@ -125,25 +138,36 @@ export function CpaDock(props: CpaDockProps): React.ReactElement | null {
   const ApiIcon = primitives.IconApiOutlineRegular
     ?? primitives.IconApiOutlineMedium
     ?? (() => null)
-  const pill = React.createElement('button', {
-    type: 'button',
-    className: [
-      'dsh-cpa-pill',
-      presentation.tone === 'error' ? 'dsh-cpa-pill-error' : '',
-      presentation.tone === 'warn' ? 'dsh-cpa-pill-warn' : '',
-    ].filter(Boolean).join(' '),
-    'aria-haspopup': groups.length > 0 ? 'dialog' : undefined,
-    'aria-expanded': groups.length > 0 ? open : undefined,
-    'aria-label': presentation.full,
-    onClick: groups.length > 0 ? () => setOpen(!open) : undefined,
-  },
-    React.createElement(ApiIcon, { size: 14 }),
-    React.createElement('span', { className: 'dsh-cpa-pill-label' }, presentation.primary),
-    presentation.secondary === '' ? null : React.createElement(React.Fragment, null,
+  const ReadingIcon = presentation.mode === 'quota'
+    ? primitives.IconGaugeOutlineRegular ?? ApiIcon
+    : ApiIcon
+  const pillClassName = [
+    'dsh-cpa-pill',
+    presentation.tone === 'error' ? 'dsh-cpa-pill-error' : '',
+    presentation.tone === 'warn' ? 'dsh-cpa-pill-warn' : '',
+  ].filter(Boolean).join(' ')
+  const pillChildren = [
+    React.createElement(ReadingIcon, { size: 14, key: 'icon' }),
+    React.createElement('span', { className: 'dsh-cpa-pill-label', key: 'label' }, presentation.primary),
+    presentation.secondary === '' ? null : React.createElement(React.Fragment, { key: 'meta' },
       React.createElement('span', { className: 'dsh-cpa-pill-sep', 'aria-hidden': true }, '·'),
       React.createElement('span', { className: 'dsh-cpa-pill-meta' }, presentation.secondary),
     ),
-  )
+  ].filter(Boolean)
+  const openable = groups.length > 0
+  const pill = openable
+    ? React.createElement('button', {
+      type: 'button',
+      className: pillClassName,
+      'aria-haspopup': 'dialog',
+      'aria-expanded': open,
+      'aria-label': presentation.full,
+      onClick: () => setOpen(!open),
+    }, ...pillChildren)
+    : React.createElement('span', {
+      className: pillClassName,
+      'aria-label': presentation.full,
+    }, ...pillChildren)
   const trigger = React.createElement(primitives.Tooltip, {
     label: presentation.full,
     side: 'top',
@@ -162,7 +186,7 @@ export function CpaDock(props: CpaDockProps): React.ReactElement | null {
     },
       React.createElement('div', { className: 'dsh-cpa-dialog-title' },
         React.createElement('span', { className: 'dsh-cpa-dialog-title-label' },
-          React.createElement(ApiIcon, { size: 14 }),
+          React.createElement(ReadingIcon, { size: 14 }),
           'CPA 状态',
         ),
         presentation.headline === '' ? null : React.createElement('span', {

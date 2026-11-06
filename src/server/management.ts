@@ -104,6 +104,8 @@ export interface ManagementExecutionStore {
 export interface ManagementPanelOptions {
   baseURL: OptionSource<string>
   managementKey: OptionSource<string>
+  /** LLM provider route this plugin registers, compared with the session's selected provider. */
+  provider?: OptionSource<string>
   getState?: () => CpaControllerState
   update?: (patch: JsonRecord) => Promise<CpaControllerState>
   executionStore?: ManagementExecutionStore | (() => ManagementExecutionStore)
@@ -334,16 +336,13 @@ function statusHandler(options: ManagementPanelOptions) {
 
 function executionStatusHandler(options: ManagementPanelOptions) {
   return async (req: IncomingMessage, res: ServerResponse) => {
+    const route = optionValue(options.provider) ?? 'cpa'
     const managementKey = optionValue(options.managementKey)
-    if (!managementKey) {
-      sendJson(res, 200, { available: false, accounts: [], quota: {}, execution: null })
-      return
-    }
     const url = new URL(req.url ?? '/', 'http://localhost')
     const sessionId = url.searchParams.get('sessionId') ?? undefined
     let quota: CpaQuotaStatus = { accounts: [], quota: {} }
     try {
-      if (options.quotaService) {
+      if (managementKey && options.quotaService) {
         quota = await options.quotaService.status()
       }
     } catch {
@@ -362,7 +361,10 @@ function executionStatusHandler(options: ManagementPanelOptions) {
       executions = []
     }
     sendJson(res, 200, {
-      available: true,
+      // A missing management key only disables the account/quota snapshot; the
+      // session's execution record can still carry quota headers.
+      available: Boolean(managementKey),
+      route,
       accounts: quota.accounts,
       quota: quota.quota,
       execution,
@@ -579,10 +581,8 @@ function managementRoutes(options: ManagementPanelOptions): WebRoute[] {
 }
 
 /**
- * Serve the management routes on the Web carrier that currently holds them.
- * The injected fiber owns the routes: its callback runs when `webServer`
- * arrives and again on every replacement, so the routes always belong to the
- * server that is listening instead of a carrier instance captured once.
+ * Serve the management routes on the current Web carrier. The callback reruns
+ * when `webServer` is replaced, so the routes follow the listening server.
  * @param ctx - context that owns the injected fiber.
  * @param options - management panel dependencies.
  * @returns disposer releasing the injected fiber, settling once the routes are gone.

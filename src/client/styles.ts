@@ -64,8 +64,10 @@ export const CLIENT_CSS = String.raw`
           line-height: inherit;
           white-space: nowrap;
           text-align: left;
-          cursor: pointer;
           appearance: none;
+        }
+        button.dsh-cpa-pill {
+          cursor: pointer;
         }
         .dsh-cpa-pill svg {
           display: block;

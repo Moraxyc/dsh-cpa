@@ -301,6 +301,8 @@ describe('core/config', () => {
     assert.match(yaml, /^access:$/m)
     assert.match(yaml, /^  api-keys:$/m)
     assert.match(yaml, /^    - "sk-test"$/m)
+    assert.match(yaml, /^requests:$/m)
+    assert.match(yaml, /^  passthrough-headers: true$/m)
     assert.match(yaml, /^observability:$/m)
     assert.match(yaml, /^  usage:$/m)
     assert.match(yaml, /^    usage-statistics-enabled: true$/m)

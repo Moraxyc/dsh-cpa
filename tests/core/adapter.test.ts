@@ -268,6 +268,8 @@ describe('core/adapter', () => {
       res.writeHead(200, {
         'content-type': 'text/event-stream',
         'x-cpa-trace-id': TRACE_ID,
+        'x-codex-primary-used-percent': '75',
+        'x-codex-primary-window-minutes': '300',
       })
       res.end(sseBody(
         'data: {"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}',
@@ -295,6 +297,10 @@ describe('core/adapter', () => {
       assert.equal(captured.outcome, 'success')
       assert.equal(captured.inputTokens, 1)
       assert.equal(captured.outputTokens, 1)
+      assert.equal(captured.quota?.provider, 'codex')
+      assert.deepEqual(captured.quota?.windows, [
+        { id: 'code-5h', label: '5h', remainingPercent: 25 },
+      ])
       assert.equal(events.some(event => event.type === 'finish'), true)
     } finally {
       await server.close()
@@ -303,7 +309,11 @@ describe('core/adapter', () => {
 
   it('reports a failed execution with the account that served it', async () => {
     const server = await startServer((_req, res) => {
-      sendJson(res, 429, { error: { message: 'quota exceeded' } }, { 'x-cpa-trace-id': TRACE_ID })
+      sendJson(res, 429, { error: { message: 'quota exceeded' } }, {
+        'x-cpa-trace-id': TRACE_ID,
+        'x-codex-secondary-used-percent': '99',
+        'x-codex-secondary-window-minutes': '10080',
+      })
     })
     try {
       const executions: CpaExecutionEvent[] = []
@@ -322,6 +332,9 @@ describe('core/adapter', () => {
       assert.equal(captured.model, 'gpt-5')
       assert.equal(captured.purpose, 'code')
       assert.equal(captured.outcome, 'failure')
+      assert.equal(captured.quota?.provider, 'codex')
+      assert.equal(captured.quota?.windows[0]?.remainingPercent, 1)
+      assert.equal(captured.quota?.windows[0]?.label, '7d')
     } finally {
       await server.close()
     }

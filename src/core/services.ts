@@ -3,6 +3,8 @@ import { dirname } from 'node:path'
 import type { ConfigScalar } from './config.js'
 import { isJsonRecord, isNonEmptyString, isNumber, isString } from './json.js'
 import type { JsonValue } from './json.js'
+import { sanitizeQuotaObservation } from './quota-headers.js'
+import type { CpaQuotaObservation } from './quota-headers.js'
 
 export interface ExecutionInput {
   authIndex?: ConfigScalar
@@ -24,6 +26,7 @@ export interface ExecutionInput {
   fallbackFrom?: ConfigScalar
   fallbackReason?: ConfigScalar
   errorCode?: ConfigScalar
+  quota?: JsonValue
 }
 
 export interface ExecutionRecord {
@@ -46,6 +49,7 @@ export interface ExecutionRecord {
   fallbackFrom?: string
   fallbackReason?: string
   errorCode?: string
+  quota?: CpaQuotaObservation
 }
 
 export interface AccountStats {
@@ -305,6 +309,8 @@ export function sanitizeExecutionRecord(value: ExecutionInput | null | undefined
   if (fallbackFrom !== undefined) record.fallbackFrom = fallbackFrom
   if (fallbackReason !== undefined) record.fallbackReason = fallbackReason
   if (errorCode !== undefined) record.errorCode = errorCode
+  const quota = sanitizeQuotaObservation(value.quota)
+  if (quota !== undefined) record.quota = quota
   return record
 }
 

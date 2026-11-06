@@ -2,22 +2,19 @@
 
 > **English** | [简体中文](README.md)
 
-A `dsh` bundle plugin for CLI Proxy API (CPA). It registers the `cpa`
-provider, sends requests to `/v1/chat/completions`, and syncs models from
-`/v1/models`.
+A plugin that connects dsh to CLI Proxy API (CPA). After installation it registers the `cpa` provider, so dsh conversations can use the models and accounts managed by CPA.
 
-## Requirements
+---
 
-Requires Node.js `>=24.22.2`.
-<!-- The last versions tested and troubleshot were dsh 0.2.2-rc.1 and CPA 8.0.57. -->
-Management routes stay available after a Web service restart.
+## User Guide
 
-CPA management integration uses only the v8 management API
-(`/v8/management`) and no longer calls `/v0/management`. Managed configuration
-is written in the nested `config-version: 8` layout, and reads parse only v8
-fields.
+### Requirements
 
-## Quickstart
+- Node.js `>=26.13.0`
+- dsh installed
+- For auto-start mode, `cli-proxy-api` must be on `PATH`, or you must set its absolute path in the settings
+
+### Install
 
 ```sh
 npx @deepseek-ai/dsh plugin --profile web add dsh-cpa
@@ -29,154 +26,132 @@ Headless profile:
 npx @deepseek-ai/dsh plugin --profile headless add dsh-cpa
 ```
 
-## Install From Source
+### Connect to CPA
 
-`src/**/*.ts` is the source; `lib/` is generated. Build before the first
-install or after changing source:
+On the CPA page in the settings panel, choose one mode:
+
+- **Auto-start (internal)**: the default. The plugin writes `$DSH_HOME/cpa/config.yaml`, starts `cli-proxy-api`, and injects the generated keys automatically.
+- **Existing CPA (external)**: enter the URL, API key, and management key, then click "Apply".
+
+CPA's management panel opens in a modal. The "Stop" action appears only while the internal CPA is running.
+
+### Models
+
+- The plugin syncs the model list from CPA's `/v1/models` every 5 minutes.
+- If a sync fails, the previous list is kept and retries use exponential backoff.
+- For models that declare image input, images in user messages are sent with the request. Requests with images are routed only to models that also accept images.
+
+### Routing and Failover
+
+- The model you select is always the first candidate.
+- Failover to the next candidate happens only before any output has been produced, and only for quota exhaustion, rate limits, server errors, network errors, or empty responses.
+- Once output has started, the request is not retried, which prevents duplicate content or duplicate side effects.
+- The "routing strategy" in advanced settings (balanced, quality, availability, quota-first) only changes candidate ordering. It does not change CPA's account switching.
+- CPA owns accounts and credentials. If CPA's management API is temporarily unavailable, the plugin routes with the last account and quota snapshot. If no snapshot exists, request availability still takes priority, and a failed lookup is never shown as fresh quota.
+
+### Status Line and Quota
+
+The status line below the composer shows the quota for the current connection. When no quota is available, it shows the current model.
+
+- ChatGPT/Codex and Claude accounts show the 5-hour window. The 7-day window appears only when 20% or less remains.
+- Other providers show their tightest quota window.
+- Low quota or failed requests use dsh's native warning or error colors.
+- The status line is hidden when the current session does not use the `cpa` provider.
+- Click the status line to expand quota, account, source, Base URL, prefix, model, CPA trace ID, and request ID. When a request ID exists, you can also open CPA's original request log.
+
+Codex and Claude quota comes from inference response headers and reflects only the most recently routed account:
+
+- The managed internal CPA config enables `requests.passthrough-headers`. An external CPA must enable it yourself.
+- WebSocket routes do not return quota headers, so this quota is unavailable for them.
+- The plugin never polls Anthropic's quota endpoint, because it is heavily rate-limited.
+
+### Usage and Alerts
+
+- Internal CPA enables usage statistics by default (`observability.usage.usage-statistics-enabled`). You can turn it off in the settings panel.
+- The "Daily request alert" is a soft threshold, `0` (disabled) by default. When reached, it shows a warning in diagnostics and settings but does not block requests.
+- CPA has no unified price model, so the plugin does not estimate costs.
+
+### Settings
+
+| Mode | Settings |
+| --- | --- |
+| External | URL, API key, management key |
+| Internal | CPA executable path (default `cli-proxy-api`) |
+| Both | Model refresh interval, quota cache and concurrency, routing strategy, daily request alert, execution record path |
+| Internal only | Port, config path, usage statistics toggle |
+
+Settings are saved in the `dsh-cpa` configuration of the active profile.
+
+### Diagnostics
+
+Use "CPA Connection Diagnostics" in the settings panel to re-check on demand:
+
+- Runtime status, model sync, management API, accounts, and quota
+- A model-to-account availability matrix
+- Local execution totals for the last 24 hours (requests, failures, tokens), labeled separately from CPA's official usage
+- CPA summary: version and update status, runtime config, usage, and accounts
+
+The diagnostics report can be exported as sanitized JSON. It excludes API keys, management keys, account IDs, project IDs, and credentials.
+
+---
+
+## Developer Guide
+
+### Source Layout
+
+| Path | Description |
+| --- | --- |
+| `src/index.ts` | Plugin entry point |
+| `src/core/` | Config, adapter, router, services, quota header parsing |
+| `src/server/` | Runtime, management routes, data aggregation, quota queries |
+| `src/client/` | Browser side: settings panel, status line, composer docking |
+| `lib/` | Build output, git-ignored, do not edit by hand |
+| `tests/` | Tests; the build runs first |
+
+### Build and Check
+
+```sh
+npm run build    # tsc compiles the server side to lib/; esbuild bundles the client into lib/client.js
+npm run check    # build + type checks for client and tests + oxlint
+npm test         # builds first, then runs tests/**/*.test.ts
+```
+
+Install a local build into dsh:
 
 ```sh
 npm run build
 npx @deepseek-ai/dsh plugin --profile web add .
 ```
 
-Headless profile:
+For the headless profile, replace `web` with `headless`.
 
-```sh
-npm run build
-npx @deepseek-ai/dsh plugin --profile headless add .
-```
+### Server Endpoints
 
-`npm run build` compiles the Server-side TypeScript from `src` into `lib` with
-`tsc`, then bundles `src/client/` into a single `lib/client.js` with esbuild.
-`npm run check` builds, type-checks, and lints; `npm test` runs the tests
-against `lib` after building.
+All endpoints are served by the plugin under the `/dsh-cpa` prefix:
 
-## Use An Existing CPA
+| Path | Description |
+| --- | --- |
+| `/dsh-cpa/status` | Runtime status |
+| `/dsh-cpa/settings` | Read and save settings |
+| `/dsh-cpa/summary` | CPA summary (read-only, briefly cached on the server) |
+| `/dsh-cpa/diagnostics` | Connection diagnostics and availability matrix (read-only) |
+| `/dsh-cpa/execution-status?sessionId=...` | Status line data for a session (read-only) |
+| `POST /dsh-cpa/preflight` | Accepts `{ model, inputTokens, maxTokens, reasoningEffort }` and returns the candidate route and preflight result. It only computes routing, never sends a model request, and does not accept message content |
+| `GET /dsh-cpa/report` | Sanitized JSON diagnostics report |
+| `/dsh-cpa/management` | Serves CPA's management panel |
 
-Switch to "External CPA" in the settings panel, enter the URL, API key, and
-management key, then apply.
+### Management API Conventions
 
-## Auto-Start CPA
+- Only CPA's v8 management API (`/v8/management`) is used.
+- Managed config is generated in the nested `config-version: 8` layout, and reads parse only v8 fields.
+- The summary uses `/v8/management/observability/usage/api-keys`, `/v8/management/credentials`, `/v8/management/credentials/models`, and `/v8/management/config/api-keys`. API-key providers are merged with credentials by `auth_index`.
+- Quota queries run on the server through `/v8/management/requests/api-call`.
+- The CPA management API does not expose token totals, so token values in the summary stay at `0`.
+- A failure in one data source is recorded as an error and does not affect the others.
 
-By default the plugin writes `$DSH_HOME/cpa/config.yaml`, starts
-`cli-proxy-api`, and injects the generated key into the provider adapter.
-Before starting, the plugin resolves the executable from `PATH`; if it is
-missing, enter an absolute path in the internal CPA setting.
+### Data and Privacy
 
-Models sync from `/v1/models` every 5 minutes. A failed sync keeps the last
-model list and retries with exponential backoff.
-
-## Image Input
-
-Models whose catalog `input_modalities` include `image` declare image input.
-User-message images are sent as `image_url` data URLs; tool-result images are
-sent as one user message after that tool-result run. Requests with images only
-fall back to candidates that also accept images.
-
-## Agent Routing and Failover
-
-When an agent request enters the `cpa` provider, the plugin builds a candidate
-order from CPA's synchronized model capabilities, context windows, available
-models per account, and quota snapshot. The requested model always stays first.
-Only a request that has not emitted stream content may fall through to another
-candidate, and only for quota, rate-limit, server, transport, or empty-response
-failures. Once content has started, the request is never replayed, preventing
-duplicate agent output or side effects.
-
-Routing also performs a request preflight and records model-catalog, reasoning,
-context-window, account-health, and quota risks. Each attempt stores the
-candidate route, preflight result, failure code, and fallback source; the
-composer CPA readout shows the actual attempt chain and fallback reason.
-Quota windows share normal, warning, critical, and unknown risk labels that are
-also used by candidate routing.
-
-When the management API is temporarily unavailable, the plugin keeps using the
-last sanitized account/quota snapshot for basic routing. If no snapshot exists,
-it preserves request availability and does not present a management failure as
-fresh quota data.
-
-Credential ownership and account switching remain inside CPA. The plugin
-consumes sanitized account and quota data without reimplementing CPA account
-management.
-
-## Settings Panel
-
-The CPA page is exposed in the Plugins `plugins.item` slot and uses dsh's
-profile-backed Config/settings form. Settings are saved to the active profile's
-`dsh-cpa` configuration. The legacy `$DSH_HOME/cpa/settings.json` is used only
-for one-time migration and compatibility with the old management API. Stop is
-only shown while the internal CPA is running. The management panel opens in a
-modal. External mode configures URL, API key, and management key; internal mode
-configures the CPA executable path. Advanced settings cover the
-port, model refresh interval, quota cache/concurrency, and config, settings,
-and execution record paths. The port, config path, and usage statistics only
-apply to internal CPA; model refresh, quota cache/concurrency, settings path,
-and execution record path apply to both modes.
-
-Advanced settings also expose balanced, quality, availability, and quota-first
-routing strategies. The strategy only changes dsh-cpa candidate ordering; CPA
-continues to own credentials and account switching.
-
-"Daily request alert" is a soft budget threshold, disabled by default with
-`0`. Reaching it produces a diagnostics/settings warning but does not silently
-block requests. CPA does not expose a uniform price model, so the plugin does
-not invent a monetary estimate.
-
-## Usage Status
-
-The plugin parses `x-cpa-trace-id` from successful and failed responses, writes sanitized
-execution records to `$DSH_HOME/cpa/executions.json`, and exposes a `cpaUsage`
-projection for the current session. `/dsh-cpa/execution-status?sessionId=...`
-returns sanitized accounts, a quota snapshot, the latest execution record, and
-recent attempts for the current session. The browser cannot call CPA's
-`/v8/management/requests/api-call`; it is only used by the server-side quota
-query. The
-readout shows only CPA-specific state: the currently used provider/plan, failure
-or unavailable status, and one primary quota window, without repeating the token,
-latency, or performance stats already shown by dsh. Providers are read from both
-auth files and API key configuration. Execution records locate the current provider
-by CPA trace account; when the trace has no account or the account is not present in
-the loaded config, the readout infers the provider from the model. Clicking it
-expands account, source, Base URL/prefix, quota, model/purpose, and CPA
-trace/request details. The same session still keeps per-account request, failure,
-and token totals for the `cpaUsage` projection, and the readout hides when no
-management API is available.
-
-The internal CPA `observability.usage.usage-statistics-enabled` setting is on by
-default and can be disabled in the CPA settings panel.
-
-## CPA Summary
-
-A read-only `/dsh-cpa/summary` endpoint is served by the plugin. The server
-uses the management key to call CPA's management API, and the browser only
-receives sanitized summary data, never the management key or credential fields.
-It includes version/update state, a whitelisted runtime config snapshot, usage
-request totals aggregated from `/v8/management/observability/usage/api-keys`
-and `/v8/management/credentials` counters, sanitized accounts, and
-model-to-account availability from `/v8/management/credentials/models`. API-key
-providers are read from `/v8/management/config/api-keys` and merged with
-credentials by `auth_index`. The CPA management API does not expose aggregate token totals, so those
-values stay at zero. Data is cached briefly; a failed source is recorded as an
-error without hiding other data.
-
-The settings page includes a compact "CPA Summary" section for version/update
-state, runtime config, usage totals, usage details, and accounts. Composer status
-details include a "日志" deep link when a recorded `requestId` exists, opening
-CPA's original management log surface. The management panel remains the complete
-management entry point.
-
-The read-only `/dsh-cpa/diagnostics` endpoint returns sanitized runtime, model
-sync, management API, account, and quota checks plus a model-to-account
-availability matrix. It also includes the last 24 hours of dsh-cpa-local
-execution totals for requests, failures, and tokens, kept separate from CPA's
-official usage data. The settings page exposes these checks in "CPA Connection
-Diagnostics" with a manual refresh action.
-
-`POST /dsh-cpa/preflight` accepts `{ model, inputTokens, maxTokens,
-reasoningEffort }` and returns the candidate route and request preflight result.
-It only computes routing and never sends a model request; message content is not
-accepted or forwarded so prompts do not enter the diagnostics path.
-
-`GET /dsh-cpa/report` returns a downloadable sanitized JSON report containing
-diagnostics, local usage, and recent execution traces. It excludes API keys,
-management keys, account IDs, project IDs, and credentials.
+- The browser receives only sanitized data, never the management key or credential fields.
+- Execution records are stored in `$DSH_HOME/cpa/executions.json` after sanitization.
+- The legacy `$DSH_HOME/cpa/settings.json` is read only for compatibility.
+- The default model refresh interval is `300000` ms (`src/core/config.ts`).

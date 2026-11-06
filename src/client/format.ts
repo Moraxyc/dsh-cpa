@@ -48,6 +48,27 @@ export function providerFromModel(model: string | undefined): string {
   return ''
 }
 
+const PROVIDER_FAMILIES = new Map<string, string>([
+  ['codex', 'openai'],
+  ['openai', 'openai'],
+  ['openai-compatibility', 'openai'],
+  ['openai-compatible', 'openai'],
+  ['claude', 'claude'],
+  ['anthropic', 'claude'],
+  ['gemini', 'google'],
+  ['gemini-cli', 'google'],
+  ['antigravity', 'google'],
+  ['vertex', 'google'],
+  ['aistudio', 'google'],
+])
+
+/** Collapse CPA account providers and model-derived providers to one family. */
+export function providerFamily(provider: string | undefined): string {
+  const key = String(provider ?? '').toLowerCase()
+  if (key === '' || key === 'unknown') return ''
+  return PROVIDER_FAMILIES.get(key) ?? key
+}
+
 export function positiveCount(value: number | null | undefined): number {
   const number = Number(value)
   return Number.isFinite(number) && number > 0 ? number : 0
@@ -131,28 +152,6 @@ export function reportWindows(
 export function windowPercent(window: QuotaWindow | undefined): number | null {
   if (window === undefined) return null
   return window.remainingPercent
-}
-
-export function preferredWindow(windows: readonly QuotaWindow[]): QuotaWindow | undefined {
-  const values = windows.filter(window => windowPercent(window) !== null)
-  return values.find(window => window.id === 'code-5h')
-    ?? values.find(window => window.id === 'code-7d')
-    ?? values[0]
-}
-
-export function accountCore(account: AccountView): string {
-  const parts: string[] = []
-  const label = accountLabel(account)
-  const provider = providerLabel(account.provider)
-  const plan = planLabel(account)
-  if (provider !== '' && !labelMentionsProvider(label, provider)) parts.push(provider)
-  if (plan !== '') parts.push(plan)
-  const status = accountStatus(account)
-  if (status !== '') parts.push(status)
-  const success = positiveCount(account.success)
-  const failed = positiveCount(account.failed)
-  if (success > 0 || failed > 0) parts.push(`成功 ${success} · 失败 ${failed}`)
-  return parts.join(' · ')
 }
 
 export function routeIssueLabel(code: string): string {

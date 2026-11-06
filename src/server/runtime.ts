@@ -559,6 +559,7 @@ export class CpaController {
     this.disposePanel = installManagementPanel(this.ctx, {
       baseURL: () => this.currentBaseURL(),
       managementKey: () => this.managementKey ?? '',
+      provider: this.options.provider,
       getState: () => this.getState(),
       update: patch => this.update(patch),
       executionStore: () => this.executionStore,

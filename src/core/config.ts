@@ -527,6 +527,8 @@ export function buildManagedConfig({ host, port, apiKey, managementKey, usageSta
     `    - ${JSON.stringify(apiKey)}`,
     'oauth:',
     '  auth-dir: "~/.cli-proxy-api"',
+    'requests:',
+    '  passthrough-headers: true',
     'observability:',
     '  logs:',
     '    debug: false',
@@ -675,9 +677,8 @@ export function resolveOptionsFromConfig(config: Config): CpaOptions {
 }
 
 /**
- * Read the user-editable part of Config with the same fallbacks used by the
- * runtime. This keeps a profile reset equivalent to the old deployment
- * defaults and gives volatile-update consumers a complete settings snapshot.
+ * Read the user-editable settings with the runtime's fallbacks, so a profile
+ * reset matches the defaults the runtime uses.
  */
 export function resolveCpaSettingsFromConfig(config: Config, options: CpaOptions): CpaSettings {
   return {

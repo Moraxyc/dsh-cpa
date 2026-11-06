@@ -214,6 +214,7 @@ describe('server/management', () => {
     installManagementPanel(injectedContext(recorder.webServer), {
       baseURL: () => BASE_URL,
       managementKey: () => MANAGEMENT_KEY,
+      provider: () => 'cpa-live',
       quotaService: {
         async status() {
           return { accounts, quota: { 'auth-1': quota } }
@@ -230,8 +231,53 @@ describe('server/management', () => {
       assert.equal(response.status, 200)
       assert.deepEqual(await readJson(response), {
         available: true,
+        route: 'cpa-live',
         accounts: JSON.parse(JSON.stringify(accounts)),
         quota: { 'auth-1': JSON.parse(JSON.stringify(quota)) },
+        execution,
+        executions: [execution],
+      })
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('execution status still returns stored execution quota without a management key', async () => {
+    const recorder = createRouteRecorder()
+    const execution: ExecutionRecord = {
+      authIndex: 'auth-1',
+      sessionId: 's1',
+      provider: 'cpa',
+      model: 'gpt-5',
+      purpose: '',
+      outcome: 'success',
+      traceId: 'trace-1',
+      requestId: '',
+      time: 123,
+      quota: {
+        provider: 'codex',
+        observedAt: 456,
+        windows: [{ id: 'code-5h', label: '5h', remainingPercent: 25 }],
+      },
+    }
+    installManagementPanel(injectedContext(recorder.webServer), {
+      baseURL: () => BASE_URL,
+      managementKey: () => '',
+      executionStore: () => ({
+        latest: () => execution,
+        recent: () => [execution],
+      }),
+    })
+
+    const server = await serveRoute(findRoute(recorder.routes, EXECUTION_STATUS_PATH))
+    try {
+      const response = await fetch(`${server.origin}${EXECUTION_STATUS_PATH}?sessionId=s1`)
+      assert.equal(response.status, 200)
+      assert.deepEqual(await readJson(response), {
+        available: false,
+        route: 'cpa',
+        accounts: [],
+        quota: {},
         execution,
         executions: [execution],
       })

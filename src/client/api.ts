@@ -19,6 +19,8 @@ export const MAX_SUMMARY_MODELS = 8
 
 export interface ExecutionStatusResponse {
   available: boolean
+  /** Absent on Hosts that predate this field. */
+  route?: string
   accounts: CpaAccountPublic[]
   quota: Record<string, CpaQuotaReport>
   execution: ExecutionRecord | null

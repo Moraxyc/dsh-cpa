@@ -169,6 +169,7 @@ export interface ClientPrimitives {
   useDismissOnOutsidePointer: UseDismissOnOutsidePointer
   IconApiOutlineRegular?: IconComponent
   IconApiOutlineMedium?: IconComponent
+  IconGaugeOutlineRegular?: IconComponent
   IconSettingsOutlineRegular?: IconComponent
   IconSettingsOutline14?: IconComponent
   IconStopFillRegular?: IconComponent
