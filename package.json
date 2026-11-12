@@ -44,7 +44,7 @@
     "@deepseek-ai/dsh-llm": "0.2.2-rc.1"
   },
   "engines": {
-    "node": ">=26.13.0"
+    "node": ">=26.13.1"
   },
   "dsh": {
     "bundle": {
