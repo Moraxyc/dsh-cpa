@@ -12,8 +12,10 @@ import {
   ProviderRequestId,
   ReasoningEffortId,
   requestImageHandleText,
+  RETRY_CODE_CHOICES,
 } from '@deepseek-ai/dsh-llm'
 import type {
+  BuiltinLlmFailureCode,
   ContentBlock,
   ImageBlock,
   FinishReason,
@@ -40,13 +42,11 @@ import type { CpaRoutePlan, CpaPreflightResult } from './router.js'
 
 const DONE = '[DONE]'
 const EMPTY_RESPONSE = EMPTY_RESPONSE_CODE
-const FALLBACK_ERROR_CODES = new Set([
-  'QUOTA',
-  'RATE_LIMIT',
-  'SERVER',
-  'TRANSPORT',
-  'EMPTY_RESPONSE',
-  'STREAM_CLOSED',
+// Failover before any output follows dsh's own retry taxonomy, so a class dsh
+// deems retryable is never re-routed less eagerly here; the gateway statuses a
+// proxy answers with arrive unclassified and join it explicitly.
+const FALLBACK_ERROR_CODES = new Set<string>([
+  ...RETRY_CODE_CHOICES,
   'HTTP_408',
   'HTTP_502',
   'HTTP_503',
@@ -265,7 +265,7 @@ function responseRequestId(headers: Headers): ProviderRequestId | undefined {
   return requestId(headers) ?? cpaTrace(headers)?.requestId
 }
 
-function httpErrorCode(status: number, detail: string): string {
+function httpErrorCode(status: number, detail: string): BuiltinLlmFailureCode {
   if (status === 401 || status === 403) return 'AUTH'
   if (isQuotaExceededError(detail)) return 'QUOTA'
   if (status === 429) return 'RATE_LIMIT'
@@ -894,7 +894,7 @@ export class CpaAdapter extends LlmAdapter {
     try {
       for await (const event of translate(parseSse(response.body))) {
         if (event.type === 'finish' && event.reason.kind === 'error') {
-          throw new LlmError(event.reason.failure.message, event.reason.failure.code)
+          throw LlmError.fromFailure(event.reason.failure)
         }
         if (event.type === 'usage' && event.usage !== undefined) executionUsage = event.usage
         yield event

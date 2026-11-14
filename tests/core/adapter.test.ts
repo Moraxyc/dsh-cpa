@@ -433,6 +433,41 @@ describe('core/adapter', () => {
     }
   })
 
+  it('fails over on every class dsh itself treats as retryable', async () => {
+    let calls = 0
+    const server = await startServer((_req, res) => {
+      calls += 1
+      if (calls === 1) {
+        // An unparsable chunk: dsh calls this a malformed response and offers the
+        // code as a retry choice, so the gateway route must switch as well.
+        res.writeHead(200, { 'content-type': 'text/event-stream' })
+        res.end(sseBody('data: {not json'))
+        return
+      }
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      res.end(sseBody(
+        'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}',
+        'data: [DONE]',
+      ))
+    })
+    try {
+      const executions: CpaExecutionEvent[] = []
+      const adapter = makeAdapter({
+        baseURL: server.baseURL,
+        resolveRoute: () => Promise.resolve(['requested', 'fallback']),
+        onExecution: value => { executions.push(value) },
+      })
+      const events = await collect(adapter.stream({ ...userText('hi'), model: 'requested' }))
+
+      assert.equal(calls, 2)
+      assert.equal(events.some(event => event.type === 'text-delta' && event.text === 'ok'), true)
+      assert.equal(executions[1]?.model, 'fallback')
+      assert.equal(executions[1]?.fallbackReason, 'MALFORMED_RESPONSE')
+    } finally {
+      await server.close()
+    }
+  })
+
   it('does not replay a request once stream content has started', async () => {
     let calls = 0
     const server = await startServer((_req, res) => {

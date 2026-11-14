@@ -77,11 +77,21 @@ export interface SettingsFormLabels {
 
 export interface SettingsFieldState {
   text: string
+  /** Whether saving would leave a user-layer override for the field. */
+  overridden?: boolean
+  /** Whether the draft is not a value the field accepts; the save stays blocked. */
+  invalid?: boolean
 }
 
 export interface FormShell {
+  /** False while the Host does not serve this namespace; the entry renders nothing. */
+  available?: boolean
   writable: boolean
+  dirty?: boolean
+  invalid?: boolean
   saving: boolean
+  /** Whether the last save did not land as staged. */
+  failed?: boolean
 }
 
 export interface FormActions {
@@ -134,17 +144,6 @@ export interface TooltipProps {
   children?: React.ReactNode
 }
 
-export interface AnchoredPositionOptions {
-  open: boolean
-  anchorRef: React.RefObject<Element | null>
-  panelRef: React.RefObject<Element | null>
-  side: 'top' | 'bottom'
-  gap: number
-  margin: number
-}
-
-export type UseAnchoredPosition = (options: AnchoredPositionOptions) => React.CSSProperties | undefined
-
 export type UseDismissOnOutsidePointer = (
   anchorRef: React.RefObject<Element | null>,
   open: boolean,
@@ -165,7 +164,6 @@ export interface ClientPrimitives {
   Tooltip: React.ComponentType<TooltipProps>
   settingsNumberField(field: string): SettingsFieldDescriptor
   settingsTextField(field: string): SettingsFieldDescriptor
-  useAnchoredPosition: UseAnchoredPosition
   useDismissOnOutsidePointer: UseDismissOnOutsidePointer
   IconApiOutlineRegular?: IconComponent
   IconApiOutlineMedium?: IconComponent

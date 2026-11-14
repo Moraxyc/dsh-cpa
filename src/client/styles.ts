@@ -118,17 +118,18 @@ export const CLIENT_CSS = String.raw`
         .dsh-cpa-pill-meta {
           flex: 0 0 auto;
         }
+        /* CSS anchor placement above the pill; the panel sets its own
+           position-anchor, so no measurement pass runs before paint. */
         .dsh-cpa-dialog {
           position: fixed;
           z-index: 1100;
           box-sizing: border-box;
           width: max-content;
           min-width: min(300px, calc(100vw - 24px));
-          max-width: min(440px, calc(100vw - 24px), var(--dsh-anchored-max-width, 100vw));
-          max-height: min(440px, calc(100vh - 24px));
-          max-height: min(440px, calc(100vh - 24px), var(--dsh-anchored-max-height, 100vh));
+          max-width: min(440px, calc(100vw - 24px));
           padding: 16px;
-          overflow: hidden auto;
+          overflow-x: hidden;
+          overflow-y: auto;
           border: 0;
           border-radius: var(--dsw-radius-lg, 12px);
           background: var(--dsw-specific-menu, var(--dsw-alias-bg-overlay));
@@ -141,6 +142,60 @@ export const CLIENT_CSS = String.raw`
           --dsw-elevation-stroke-color: var(--dsw-alias-border-l1);
           --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
           --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+          max-height: calc(100dvh - 12px - max(12px, var(--dsh-frame-overlay-top, 12px)));
+          position-area: none;
+          top: max(12px, var(--dsh-frame-overlay-top, 12px));
+          bottom: max(12px, calc(anchor(top) + 8px));
+          left: max(12px, anchor(left));
+          right: 12px;
+          position-try-fallbacks: --dsh-cpa-dialog-window, --dsh-cpa-dialog-opposite,
+            --dsh-cpa-dialog-wide-opposite, --dsh-cpa-dialog-tall, --dsh-cpa-dialog-viewport;
+          align-self: end;
+          justify-self: start;
+          height: fit-content;
+          min-height: 0;
+          margin: 0;
+        }
+        /* Narrow or short viewports: keep the panel inside the window. */
+        @position-try --dsh-cpa-dialog-window {
+          position-area: none;
+          top: max(12px, var(--dsh-frame-overlay-top, 12px));
+          bottom: max(12px, calc(anchor(top) + 8px));
+          left: 12px;
+          right: 12px;
+          margin: 0;
+          align-self: safe end;
+          justify-self: safe end;
+        }
+        @position-try --dsh-cpa-dialog-opposite {
+          top: max(12px, calc(anchor(bottom) + 8px));
+          bottom: 12px;
+          align-self: start;
+        }
+        @position-try --dsh-cpa-dialog-wide-opposite {
+          top: max(12px, calc(anchor(bottom) + 8px));
+          bottom: 12px;
+          left: 12px;
+          right: 12px;
+          align-self: start;
+          justify-self: safe end;
+        }
+        @position-try --dsh-cpa-dialog-tall {
+          position-area: none;
+          top: max(12px, var(--dsh-frame-overlay-top, 12px));
+          bottom: 12px;
+          left: max(12px, anchor(left));
+          right: 12px;
+          margin: 0;
+          align-self: safe start;
+          justify-self: start;
+        }
+        @position-try --dsh-cpa-dialog-viewport {
+          position-area: none;
+          inset: max(12px, var(--dsh-frame-overlay-top, 12px)) 12px 12px;
+          margin: 0;
+          align-self: safe start;
+          justify-self: safe end;
         }
         .dsh-cpa-dialog-title {
           display: flex;

@@ -2,8 +2,12 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import type { ServerResponse } from 'node:http'
 
+import { Context } from '@deepseek-ai/cordis'
+import { KNOWN_SESSION_EVENT_TYPES, pluginRecordOf, SessionId, SessionStore } from '@deepseek-ai/dsh-session'
 import { resolveOptions, sanitizeCpaSettings } from '../../lib/core/config.js'
 import type { CpaSettings } from '../../lib/core/config.js'
+import { isJsonRecord } from '../../lib/core/json.js'
+import { EXECUTION_RECORD_TYPE } from '../../lib/core/services.js'
 import {
   CpaController,
   cpaSettingsEqual,
@@ -11,10 +15,33 @@ import {
   modelSyncRetryDelay,
   resolveInitialCpaSettings,
 } from '../../lib/server/runtime.js'
-import { DEFAULT_ADVANCED_SETTINGS } from '../helpers/fixtures.ts'
+import type { CpaRuntimeContext } from '../../lib/server/runtime.js'
+import { DEFAULT_ADVANCED_SETTINGS, sessionId } from '../helpers/fixtures.ts'
 import { sendJson, startServer } from '../helpers/http.ts'
 
 const SYNC_TIMEOUT_TICK_MS = 20
+
+/** Persisted projection state as the host's schema sees it. */
+type ProjectionState = null | { requests: number }
+
+/** The slice of the projection unit the host registry restores and serves. */
+interface ProjectionDefinitionStub {
+  key: string
+  stateSchema?: { parse(state: ProjectionState): ProjectionState }
+  apply?(state: ProjectionState, event: { type: string }): ProjectionState
+  wire?: {
+    viewSchema?: { parse(state: ProjectionState): ProjectionState }
+    view?(state: ProjectionState): ProjectionState
+    summary?: boolean
+  }
+  stateVersion?: number
+}
+
+/** What the stub registry received from one registration. */
+interface ProjectionCapture {
+  definition?: ProjectionDefinitionStub
+  onRejected?: (error: Error) => void
+}
 
 function externalSettings(baseURL: string): CpaSettings {
   return sanitizeCpaSettings({
@@ -73,6 +100,86 @@ describe('server/runtime', () => {
       await controller.stopRuntime()
       await server.close()
     }
+  })
+
+  it('registers the cpaUsage projection with the schema and client view a current host restores', () => {
+    const warnings: string[] = []
+    const captured: ProjectionCapture = {}
+    const scope = {
+      sessionProjections: {
+        register(definition: ProjectionDefinitionStub) {
+          captured.definition = definition
+          return {
+            catch(onRejected: (error: Error) => void) {
+              captured.onRejected = onRejected
+            },
+          }
+        },
+      },
+    }
+    const controller = new CpaController({
+      get: () => undefined,
+      logger: { warn: message => { warnings.push(String(message)) } },
+      llm: { registerAdapter: () => () => {} },
+      effect: () => {},
+      // SAFETY: the controller passes its own projection scope to the injection factory; the stub records the definition the real registry receives.
+      inject: ((_deps: readonly string[], factory: (injected: typeof scope) => void) => {
+        factory(scope)
+        return { dispose: () => {} }
+      }) as CpaRuntimeContext['inject'],
+    }, resolveOptions({}), externalSettings('http://127.0.0.1:1'))
+
+    controller.installProjection()
+
+    const definition = captured.definition
+    assert.equal(definition?.key, 'cpaUsage')
+    // A persisted row restores only through the state schema.
+    assert.equal(definition?.stateSchema?.parse(null), null)
+    // Unrelated events keep the state reference, so the host drives no extra work.
+    const state = { requests: 1 }
+    assert.equal(definition?.apply?.(state, { type: 'turn/start' }), state)
+    // The status line reads the unit over the wire, which summaries must not carry.
+    assert.equal(definition?.wire?.summary, false)
+    assert.equal(definition?.wire?.view?.(null), null)
+    assert.equal(definition?.wire?.viewSchema?.parse(state), state)
+    // Asynchronous registration failures reach the plugin log instead of staying unobserved.
+    captured.onRejected?.(new Error('registry offline'))
+    assert.ok(warnings.some(message => message.includes('projection registration failed: registry offline')))
+  })
+
+  it('records executions as ignorable plugin records a current host can still restore', async () => {
+    // The real store and record writer: a host reader refuses any event type it
+    // does not know unless the entry is ignorable, so the record must come from
+    // the plugin record namespace rather than the released event vocabulary.
+    const store = new SessionStore(new Context())
+    const target = sessionId('session-1')
+    const session = store.create(SessionId(target), { meta: { cwd: '/' } })
+    const controller = new CpaController({
+      get: () => undefined,
+      logger: { warn: () => {} },
+      llm: { registerAdapter: () => () => {} },
+      effect: () => {},
+      sessions: { get: id => store.get(SessionId(id)) },
+    }, resolveOptions({}), externalSettings('http://127.0.0.1:1'))
+
+    await controller.recordExecution({
+      provider: 'cpa',
+      model: 'gpt-5',
+      sessionId: target,
+      outcome: 'success',
+    })
+
+    const events = session.snapshotEvents()
+    assert.equal(events.length, 1)
+    assert.ok(events[0] !== undefined)
+    // `ignorable` plus an unknown type is the pair a host reader tolerates on restore.
+    assert.equal(events[0].ignorable, true)
+    assert.equal(KNOWN_SESSION_EVENT_TYPES.has(EXECUTION_RECORD_TYPE), false)
+    const record = pluginRecordOf(events[0])
+    assert.equal(record?.type, EXECUTION_RECORD_TYPE)
+    const data = isJsonRecord(record?.data) ? record.data : undefined
+    assert.equal(data?.model, 'gpt-5')
+    assert.equal(data?.outcome, 'success')
   })
 
   it('resolveInitialCpaSettings seeds from deployment options, and mergeCpaSettings validates patches', () => {

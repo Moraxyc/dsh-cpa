@@ -1,5 +1,7 @@
 import { resolveImageAttachmentAccess } from '@deepseek-ai/dsh-llm'
 import type { LlmAdapter } from '@deepseek-ai/dsh-llm'
+import { appendPluginRecord } from '@deepseek-ai/dsh-session'
+import type { Session } from '@deepseek-ai/dsh-session'
 import { CpaAdapter, resolveApiKey } from '../core/adapter.js'
 import type { CpaAttachmentStore, CpaExecutionEvent } from '../core/adapter.js'
 
@@ -38,13 +40,14 @@ import type { JsonRecord, JsonValue } from '../core/json.js'
 import {
   aggregateCpaUsage,
   CpaExecutionStore,
+  EXECUTION_RECORD_TYPE,
+  LEGACY_EXECUTION_RECORD_TYPE,
   sanitizeExecutionRecord,
   simpleProjectionSchema,
 } from '../core/services.js'
 import type {
   CpaUsageProjection,
   ExecutionInput,
-  ExecutionRecord,
   ProjectionSchema,
 } from '../core/services.js'
 import { CpaDataService } from './data.js'
@@ -66,7 +69,7 @@ export interface CpaRuntimeContext {
   on?: (event: string, listener: (...args: never[]) => void) => () => void
   logger?: { warn?: (message: string | Error) => void }
   sessions?: {
-    get(sessionId: string): { append(type: string, data: ExecutionRecord): void } | undefined
+    get(sessionId: string): Session | undefined
   }
   inject?: (
     deps: readonly string[],
@@ -85,22 +88,42 @@ interface CpaInjectedScope extends SessionProjectionContext, ManagementWebScope 
 
 interface SessionProjectionContext {
   sessionProjections: {
-    register(projection: SessionProjection): void
+    /**
+     * Current hosts resolve the unit asynchronously and report readiness
+     * through `catch`; older ones return nothing.
+     */
+    register(projection: SessionProjection): ProjectionRegistration | void
   }
+}
+
+/** Observable outcome of an asynchronous projection registration. */
+interface ProjectionRegistration {
+  catch(onRejected: (error: Error) => void): void
 }
 
 interface SessionProjection {
   key: string
-  schema: ProjectionSchema<unknown>
+  /** Validates a persisted state row before it seeds a fold; restore fails without it. */
+  stateSchema: ProjectionSchema<unknown>
   init(): CpaUsageProjection | null
   apply(state: CpaUsageProjection | null, event: CpaUsageEvent): CpaUsageProjection | null
-  view(state: CpaUsageProjection | null): CpaUsageProjection | null
+  /** Client view; omit to keep the unit host-only. */
+  wire: {
+    viewSchema: ProjectionSchema<unknown>
+    view(state: CpaUsageProjection | null): CpaUsageProjection | null
+    summary?: boolean
+  }
   stateVersion: number
 }
 
 interface CpaUsageEvent {
   type: string
   data: ExecutionInput | null | undefined
+}
+
+/** Whether one committed session event carries a CPA execution record. */
+function isExecutionRecordType(type: string): boolean {
+  return type === EXECUTION_RECORD_TYPE || type === LEGACY_EXECUTION_RECORD_TYPE
 }
 
 const MODEL_SYNC_RETRY_INITIAL_MS = 3_000
@@ -590,7 +613,8 @@ export class CpaController {
       const sessionId = record.sessionId
       if (sessionId !== undefined && sessionId !== '') {
         try {
-          this.ctx.sessions?.get(sessionId)?.append('cpa/execution', record)
+          const session = this.ctx.sessions?.get(sessionId)
+          if (session !== undefined) appendPluginRecord(session, EXECUTION_RECORD_TYPE, record)
         } catch (error) {
           this.ctx.logger?.warn?.(`dsh-cpa: session execution append failed: ${errorMessage(error)}`)
         }
@@ -605,16 +629,30 @@ export class CpaController {
     if (this.disposeProjection !== undefined) return
     try {
       const fiber = this.ctx.inject?.(['sessionProjections'], projectionCtx => {
-        projectionCtx.sessionProjections.register({
+        const registration = projectionCtx.sessionProjections.register({
           key: 'cpaUsage',
-          schema: simpleProjectionSchema(),
+          stateSchema: simpleProjectionSchema(),
           init: () => null,
-          apply: (state, event) => event.type === 'cpa/execution'
+          apply: (state, event) => isExecutionRecordType(event.type)
             ? aggregateCpaUsage(state, event.data) ?? null
             : state,
-          view: state => state,
-          stateVersion: 1,
+          wire: {
+            viewSchema: simpleProjectionSchema(),
+            view: state => state,
+            // The status line reads this key on demand; session summaries do not.
+            summary: false,
+          },
+          // The fold gained a record type, so checkpoints written for the old
+          // spelling must refold instead of seeding a partial history.
+          stateVersion: 2,
         })
+        // Resolution is asynchronous on current hosts, where an unobserved
+        // rejection only reaches the registry's own log.
+        if (registration !== undefined) {
+          registration.catch((error: Error) => {
+            this.ctx.logger?.warn?.(`dsh-cpa: projection registration failed: ${errorMessage(error)}`)
+          })
+        }
       })
       if (fiber !== undefined) {
         this.disposeProjection = () => fiber.dispose()

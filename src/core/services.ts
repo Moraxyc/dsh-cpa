@@ -52,6 +52,22 @@ export interface ExecutionRecord {
   quota?: CpaQuotaObservation
 }
 
+/**
+ * The session-log record this plugin owns. An `ignorable` plugin record is the
+ * only log entry current dsh restores without rejecting the whole Session, so
+ * a host that does not know the type retains and skips it instead.
+ */
+export const EXECUTION_RECORD_TYPE = 'plugin:dsh-cpa/execution'
+
+/** Pre-release spelling this plugin wrote before the plugin record namespace existed. */
+export const LEGACY_EXECUTION_RECORD_TYPE = 'cpa/execution'
+
+declare module '@deepseek-ai/dsh-session' {
+  interface PluginRecordMap {
+    'plugin:dsh-cpa/execution': ExecutionRecord
+  }
+}
+
 export interface AccountStats {
   authIndex: string
   requests: number

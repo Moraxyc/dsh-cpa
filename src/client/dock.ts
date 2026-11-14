@@ -6,9 +6,8 @@ import { activeSelection, detailGroups, readoutPresentation } from './readout.js
 import type { DetailGroup, SessionModelSelection } from './readout.js'
 import { clientRuntime } from './runtime.js'
 
-const DIALOG_GAP = 8
-const DIALOG_MARGIN = 12
-const DIALOG_MEASURE: React.CSSProperties = { visibility: 'hidden', left: 0, top: 0 }
+/** CSS anchor name shared by a pill trigger and its portaled dialog. */
+const DIALOG_ANCHOR_PREFIX = '--dsh-cpa-dock-'
 
 export interface CpaDockProps {
   sessionId?: string
@@ -33,7 +32,8 @@ interface ReadoutDialogState {
   anchorRef: React.RefObject<HTMLSpanElement | null>
   open: boolean
   panelRef: React.RefObject<HTMLDivElement | null>
-  position: React.CSSProperties | undefined
+  /** Anchor name the panel resolves its placement against. */
+  anchorName: string
   setOpen: (open: boolean) => void
 }
 
@@ -42,14 +42,7 @@ function useReadoutDialog(): ReadoutDialogState {
   const [open, setOpen] = React.useState(false)
   const anchorRef = React.useRef<HTMLSpanElement | null>(null)
   const panelRef = React.useRef<HTMLDivElement | null>(null)
-  const position = primitives.useAnchoredPosition({
-    open,
-    anchorRef,
-    panelRef,
-    side: 'top',
-    gap: DIALOG_GAP,
-    margin: DIALOG_MARGIN,
-  })
+  const anchorName = `${DIALOG_ANCHOR_PREFIX}${React.useId().replaceAll(':', '')}`
   primitives.useDismissOnOutsidePointer(anchorRef, open, setOpen, panelRef)
   React.useEffect(() => {
     if (!open) return undefined
@@ -59,7 +52,7 @@ function useReadoutDialog(): ReadoutDialogState {
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [open])
-  return { anchorRef, open, panelRef, position, setOpen }
+  return { anchorRef, open, panelRef, anchorName, setOpen }
 }
 
 function DetailSection({ group, showTitle }: { group: DetailGroup; showTitle: boolean }): React.ReactElement {
@@ -89,7 +82,7 @@ export function CpaDock(props: CpaDockProps): React.ReactElement | null {
   const projection = props.useProjection<ExecutionRecord | null>('cpaUsage')
   const selection = props.useProjection<SessionModelSelection>('modelSelection')
   const [readout, setReadout] = React.useState<ExecutionStatusResponse | null>(null)
-  const { anchorRef, open, panelRef, position, setOpen } = useReadoutDialog()
+  const { anchorRef, open, panelRef, anchorName, setOpen } = useReadoutDialog()
 
   React.useEffect(() => {
     setReadout(null)
@@ -182,7 +175,7 @@ export function CpaDock(props: CpaDockProps): React.ReactElement | null {
       className: 'dsh-cpa-dialog',
       role: 'dialog',
       'aria-label': 'CPA 状态',
-      style: position ?? DIALOG_MEASURE,
+      style: { positionAnchor: anchorName },
     },
       React.createElement('div', { className: 'dsh-cpa-dialog-title' },
         React.createElement('span', { className: 'dsh-cpa-dialog-title-label' },
@@ -202,5 +195,10 @@ export function CpaDock(props: CpaDockProps): React.ReactElement | null {
     ),
     document.body,
   ) : null
-  return React.createElement('span', { ref: anchorRef, className: 'dsh-cpa-dock' }, trigger, dialog)
+  return React.createElement('span', {
+    ref: anchorRef,
+    className: 'dsh-cpa-dock',
+    // The pill is the dialog's CSS anchor, so placement needs no measurement pass.
+    style: { anchorName },
+  }, trigger, dialog)
 }

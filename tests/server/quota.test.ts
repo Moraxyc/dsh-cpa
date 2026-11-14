@@ -330,6 +330,46 @@ describe('server/quota', () => {
     }
   })
 
+  it('CpaQuotaService treats an absent api-keys section as no upstream accounts', async () => {
+    const requestedPaths: string[] = []
+    const server = await startServer((req, res) => {
+      req.resume()
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      requestedPaths.push(url.pathname)
+      switch (url.pathname) {
+        case '/v8/management/credentials':
+          sendJson(res, 200, {
+            observed_at: '2026-01-01T00:00:00Z',
+            files: [{ auth_index: 'auth-1', provider: 'codex', status: 'active' }],
+          })
+          return
+        case '/v8/management/config/api-keys':
+          // Current CPA answers 404 when the configuration file omits the section.
+          sendJson(res, 404, { error: 'not_found' })
+          return
+        default:
+          res.writeHead(404)
+          res.end()
+      }
+    })
+
+    try {
+      const service = new CpaQuotaService({
+        baseURL: server.baseURL,
+        managementKey: MANAGEMENT_KEY,
+        authFilesTtlMs: 60_000,
+      })
+      const accounts = await service.refreshAccounts()
+      assert.deepEqual(accounts.map(account => account.authIndex), ['auth-1'])
+      assert.deepEqual(requestedPaths, [
+        '/v8/management/credentials',
+        '/v8/management/config/api-keys',
+      ])
+    } finally {
+      await server.close()
+    }
+  })
+
   it('CpaQuotaService keeps the cached account snapshot when management is offline', async () => {
     const server = await startServer((req, res) => {
       req.resume()

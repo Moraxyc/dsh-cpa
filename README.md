@@ -10,7 +10,7 @@
 
 ### 要求
 
-- Node.js `>=26.13.0`
+- Node.js 24 或更新版本
 - 已安装 dsh
 - 使用自动启动模式时，`cli-proxy-api` 需在 `PATH` 中，或在设置中填写它的绝对路径
 
@@ -44,7 +44,7 @@ CPA 的管理面板会在弹窗中打开。只有内部 CPA 运行时，才显�
 ### 路由与故障切换
 
 - 你选择的模型永远是第一候选。
-- 只有在回复尚未输出任何内容时，遇到额度耗尽、限流、服务端错误、网络错误或空响应，才会切换到下一个候选。
+- 只有在回复尚未输出任何内容时，遇到额度耗尽、限流、超时、服务端错误、网络错误、空响应或无法解析的响应，才会切换到下一个候选。可切换的错误类别取自 dsh 自身的重试分类，插件不再维护另一套清单。
 - 回复开始输出后不会重试，避免重复内容或重复执行副作用。
 - 高级设置中的“路由策略”（平衡、质量、可用性、额度优先）只影响候选排序，不改变 CPA 的账号切换。
 - 账号和凭据始终由 CPA 管理。CPA 管理接口暂时不可用时，插件使用最近一次的账号和额度快照做路由；没有快照时，仍优先保证请求可用，不会把查询失败显示为最新额度。
@@ -145,6 +145,8 @@ headless profile 将 `web` 替换为 `headless`。
 - 只使用 CPA 的 v8 管理接口（`/v8/management`）。
 - 托管配置按 `config-version: 8` 的嵌套结构生成，读取时只解析 v8 字段。
 - 摘要使用的接口包括 `/v8/management/observability/usage/api-keys`、`/v8/management/credentials`、`/v8/management/credentials/models` 和 `/v8/management/config/api-keys`。API key 服务商通过 `auth_index` 与凭据合并。
+- CPA 对配置文件中不存在的段落返回 `404 not_found`，因此 `/v8/management/config/api-keys` 的 404 视为“没有 API key 服务商”，不计入摘要错误。仅使用 OAuth 账号的实例属于这种情况。
+- `/v1/models` 请求带 `client_version`，这是 CPA 返回 Codex 富模型目录（上下文窗口、推理档位、图片输入）的开关，不是客户端版本协商。
 - 额度查询通过 `/v8/management/requests/api-call` 在服务端完成。
 - CPA 管理接口不提供 token 汇总，因此摘要中的 token 始终为 `0`。
 - 单个数据源失败时只记录错误，不影响其他数据。
@@ -153,5 +155,6 @@ headless profile 将 `web` 替换为 `headless`。
 
 - 浏览器只收到脱敏数据，不会收到 management key 或凭据字段。
 - 执行记录保存在 `$DSH_HOME/cpa/executions.json`，写入前已脱敏。
+- 会话日志中的执行记录使用插件记录类型 `plugin:dsh-cpa/execution`，并标记为 `ignorable`。当前 dsh 只容忍“未知类型且可忽略”的日志事件，其他写法会让整条会话在恢复时被拒绝。旧版本写入的 `cpa/execution` 事件插件仍会识别，以便旧版 dsh 读取的会话保留统计；但 dsh 0.2.2 及之后版本拒绝恢复包含这类非忽略型事件的会话。
 - 旧版 `$DSH_HOME/cpa/settings.json` 只用于兼容读取。
 - 模型刷新间隔默认为 `300000` ms（`src/core/config.ts`）。

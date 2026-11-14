@@ -649,7 +649,15 @@ function sanitizeProviderAccounts(body: JsonValue | undefined): CpaAccount[] {
 }
 
 export async function fetchApiProviders(baseURL: string, managementKey: string): Promise<CpaAccount[]> {
-  const body = await managementApi(baseURL, managementKey, CPA_API_KEYS_CONFIG_PATH)
+  let body: JsonValue
+  try {
+    body = await managementApi(baseURL, managementKey, CPA_API_KEYS_CONFIG_PATH)
+  } catch (error) {
+    // Current CPA answers 404 for a configuration section the file omits, and
+    // an OAuth-only install has no upstream API-key groups at all.
+    if (error instanceof ManagementApiError && error.status === 404) return []
+    throw error
+  }
   return sanitizeProviderAccounts(body)
 }
 
@@ -713,12 +721,23 @@ export async function managementApiWithHeaders(
     },
     signal: AbortSignal.timeout(API_TIMEOUT_MS),
   })
-  if (!response.ok) throw new Error(`management API ${response.status}`)
+  if (!response.ok) throw new ManagementApiError(`management API ${response.status}`, response.status)
   const raw: unknown = await response.json().catch(() => null)
   const body: JsonValue = isJsonRecord(raw) || isString(raw) || isNumber(raw) || isBoolean(raw) || raw === null || Array.isArray(raw)
     ? raw
     : {}
   return { body, headers: response.headers }
+}
+
+/** A management read that did not return a usable body. */
+export class ManagementApiError extends Error {
+  readonly status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ManagementApiError'
+    this.status = status
+  }
 }
 
 export async function managementApi(baseURL: string, managementKey: string, path: string): Promise<JsonValue> {
