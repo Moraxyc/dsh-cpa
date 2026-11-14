@@ -6,7 +6,6 @@ import type { JsonRecord } from '../lib/core/json.js'
 import { migrateLegacySettings } from '../lib/index.js'
 import type { CpaRuntimeContext } from '../lib/server/runtime.js'
 
-/** The slice of the host profile-settings service that legacy migration calls. */
 interface ProfileSettingsStub {
   describe(): Array<{
     ns: string
@@ -21,7 +20,7 @@ function runtimeWithProfile(settings: ProfileSettingsStub): CpaRuntimeContext {
   return {
     get<T>(key: string): T | undefined {
       if (key !== 'settings') return undefined
-      // SAFETY: the host resolves the 'settings' key to its profile service; the stub implements the methods migration calls.
+      // SAFETY: the stub implements the profile service resolved by the 'settings' key.
       return settings as T
     },
     llm: { registerAdapter: () => () => {} },

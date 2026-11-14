@@ -31,7 +31,7 @@ npx @deepseek-ai/dsh plugin --profile headless add dsh-cpa
 On the CPA page in the settings panel, choose one mode:
 
 - **Auto-start (internal)**: the default. The plugin writes `$DSH_HOME/cpa/config.yaml`, starts `cli-proxy-api`, and injects the generated keys automatically.
-- **Existing CPA (external)**: enter the URL, API key, and management key, then click "Apply".
+- **Existing CPA (external)**: enter the URL, API key, and management key, then click "Save".
 
 CPA's management panel opens in a modal. The "Stop" action appears only while the internal CPA is running.
 
@@ -44,7 +44,7 @@ CPA's management panel opens in a modal. The "Stop" action appears only while th
 ### Routing and Failover
 
 - The model you select is always the first candidate.
-- Failover to the next candidate happens only before any output has been produced, and only for quota exhaustion, rate limits, timeouts, server errors, network errors, empty responses, or unparsable responses. The eligible classes come from dsh's own retry taxonomy, so the plugin no longer keeps a second list.
+- Failover to the next candidate happens only before any output has been produced, and only for quota exhaustion, rate limits, timeouts, server errors, network errors, empty responses, or unparsable responses.
 - Once output has started, the request is not retried, which prevents duplicate content or duplicate side effects.
 - The "routing strategy" in advanced settings (balanced, quality, availability, quota-first) only changes candidate ordering. It does not change CPA's account switching.
 - CPA owns accounts and credentials. If CPA's management API is temporarily unavailable, the plugin routes with the last account and quota snapshot. If no snapshot exists, request availability still takes priority, and a failed lookup is never shown as fresh quota.
@@ -61,7 +61,7 @@ The status line below the composer shows the quota for the current connection. W
 
 Codex and Claude quota comes from inference response headers and reflects only the most recently routed account:
 
-- The managed internal CPA config enables `requests.passthrough-headers`. An external CPA must enable it yourself.
+- The managed internal CPA config enables `requests.passthrough-headers`. Enable it yourself on an external CPA.
 - WebSocket routes do not return quota headers, so this quota is unavailable for them.
 - The plugin never polls Anthropic's quota endpoint, because it is heavily rate-limited.
 
@@ -106,14 +106,14 @@ The diagnostics report can be exported as sanitized JSON. It excludes API keys, 
 | `src/server/` | Runtime, management routes, data aggregation, quota queries |
 | `src/client/` | Browser side: settings panel, status line, composer docking |
 | `lib/` | Build output, git-ignored, do not edit by hand |
-| `tests/` | Tests; the build runs first |
+| `tests/` | Tests |
 
 ### Build and Check
 
 ```sh
-npm run build    # tsc compiles the server side to lib/; esbuild bundles the client into lib/client.js
-npm run check    # build + type checks for client and tests + oxlint
-npm test         # builds first, then runs tests/**/*.test.ts
+npm run build    # compile the server and bundle the browser client
+npm run check    # build, type checks, and lint
+npm test         # build and run the tests
 ```
 
 Install a local build into dsh:
@@ -146,7 +146,7 @@ All endpoints are served by the plugin under the `/dsh-cpa` prefix:
 - Managed config is generated in the nested `config-version: 8` layout, and reads parse only v8 fields.
 - The summary uses `/v8/management/observability/usage/api-keys`, `/v8/management/credentials`, `/v8/management/credentials/models`, and `/v8/management/config/api-keys`. API-key providers are merged with credentials by `auth_index`.
 - CPA answers `404 not_found` for a configuration section the file omits, so a 404 on `/v8/management/config/api-keys` means "no API-key providers" and is not reported as a summary error. An OAuth-only deployment is exactly that case.
-- The `/v1/models` request carries `client_version`: that is the switch that makes CPA return the rich Codex catalog (context window, reasoning levels, image input), not a client-version negotiation.
+- Send `client_version` with `/v1/models` to get the rich Codex catalog with context windows, reasoning levels, and image input. It does not negotiate the client version.
 - Quota queries run on the server through `/v8/management/requests/api-call`.
 - The CPA management API does not expose token totals, so token values in the summary stay at `0`.
 - A failure in one data source is recorded as an error and does not affect the others.
@@ -155,6 +155,5 @@ All endpoints are served by the plugin under the `/dsh-cpa` prefix:
 
 - The browser receives only sanitized data, never the management key or credential fields.
 - Execution records are stored in `$DSH_HOME/cpa/executions.json` after sanitization.
-- The session-log record uses the plugin record type `plugin:dsh-cpa/execution` and is marked `ignorable`. Current dsh tolerates only unknown *ignorable* log events; any other spelling makes it refuse the whole Session on restore. The plugin still recognizes records written by older versions as `cpa/execution`, so Sessions an older dsh can still open keep their statistics — but dsh 0.2.2 and later refuse to restore a Session containing that non-ignorable type.
+- Session execution records use `plugin:dsh-cpa/execution` and are marked `ignorable`, so dsh can restore sessions without knowing the type. The plugin also reads legacy `cpa/execution` records, but dsh 0.2.2 and later cannot restore sessions containing that non-ignorable type.
 - The legacy `$DSH_HOME/cpa/settings.json` is read only for compatibility.
-- The default model refresh interval is `300000` ms (`src/core/config.ts`).

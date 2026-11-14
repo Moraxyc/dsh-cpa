@@ -438,8 +438,7 @@ describe('core/adapter', () => {
     const server = await startServer((_req, res) => {
       calls += 1
       if (calls === 1) {
-        // An unparsable chunk: dsh calls this a malformed response and offers the
-        // code as a retry choice, so the gateway route must switch as well.
+        // Malformed SSE.
         res.writeHead(200, { 'content-type': 'text/event-stream' })
         res.end(sseBody('data: {not json'))
         return

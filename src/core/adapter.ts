@@ -42,9 +42,6 @@ import type { CpaRoutePlan, CpaPreflightResult } from './router.js'
 
 const DONE = '[DONE]'
 const EMPTY_RESPONSE = EMPTY_RESPONSE_CODE
-// Failover before any output follows dsh's own retry taxonomy, so a class dsh
-// deems retryable is never re-routed less eagerly here; the gateway statuses a
-// proxy answers with arrive unclassified and join it explicitly.
 const FALLBACK_ERROR_CODES = new Set<string>([
   ...RETRY_CODE_CHOICES,
   'HTTP_408',
@@ -84,14 +81,12 @@ export interface CpaExecutionEvent {
 type ImageRef = ImageBlock['attachment']
 type ImageAccess = Parameters<typeof offloadedImageText>[1]
 
-/** Request-image target, matching dsh-attachment's `ImageRequestTarget`. */
 export interface CpaImageTarget {
   width: number
   height: number
   maxBytes: number
 }
 
-/** One encoded request version of a stored image. */
 export interface CpaRequestImage {
   data: Uint8Array
   mediaType: string
@@ -99,18 +94,15 @@ export interface CpaRequestImage {
   height: number
 }
 
-/** The subset of dsh's attachment service the adapter reads request images through. */
 export interface CpaAttachmentStore {
   readImageRequest(ref: ImageRef, target: CpaImageTarget, signal?: AbortSignal): Promise<CpaRequestImage>
 }
 
-/** Request images prepared before serialization, keyed by attachment id. */
 export interface CpaRequestImages {
   versions: ReadonlyMap<string, CpaRequestImage>
   access(ref: ImageRef): ImageAccess
 }
 
-// Same request-image budget dsh's built-in routes default to.
 const REQUEST_IMAGE_MAX_PIXELS = 4_194_304
 const REQUEST_IMAGE_MAX_BYTES = 1_048_576
 
@@ -282,11 +274,7 @@ function routePrefix(id: string): string {
   return slash > 0 ? id.slice(0, slash) : ''
 }
 
-/**
- * Selector names for the synced catalog. CPA lists one model under several ids
- * (a bare alias and provider-qualified routes) that share a display name, while
- * DSH selectors render only the name, so colliding names carry their route.
- */
+// Include routes in colliding names because dsh selectors show only the name.
 function modelNames(models: readonly CpaModel[]): Map<string, string> {
   const groups = new Map<string, CpaModel[]>()
   for (const model of models) {
@@ -342,7 +330,7 @@ function flattenText(blocks: readonly ContentBlock[]): string {
 
 function assertTextOnly(blocks: readonly ContentBlock[]): void {
   if (contentHasImage(blocks)) {
-    throw new LlmError('CPA does not support images', 'UNSUPPORTED_CONTENT')
+    throw new LlmError('CPA accepts images only in user and tool messages', 'UNSUPPORTED_CONTENT')
   }
 }
 
@@ -375,7 +363,6 @@ function joinText(parts: readonly WireContentPart[]): string {
   return parts.map(part => part.type === 'text' ? part.text : '').join('')
 }
 
-/** Collect the stored images a request sends natively, deduplicated by attachment id. */
 export function requestImageRefs(messages: readonly RequestMessage[]): ImageRef[] {
   const refs = new Map<string, ImageRef>()
   for (const message of messages) {
@@ -401,9 +388,8 @@ function serializeAssistant(message: Message): WireMessage {
 }
 
 /**
- * Serialize request history to the chat-completions wire. Images are allowed
- * in user and tool messages; chat-completions tool messages are text-only, so
- * tool-result images follow the tool-result run as one user message.
+ * Tool-result images follow the tool-result run in a user message because
+ * chat-completions tool messages accept only text.
  */
 export function serializeMessages(
   messages: readonly RequestMessage[],
@@ -686,7 +672,6 @@ async function readError(response: Response): Promise<never> {
       .filter((value): value is string => isString(value))
       .join(' ')
   } catch {
-    // Keep the HTTP status line for malformed error bodies.
   }
   const delay = providerRetryAfterMs(response.headers.get('retry-after'))
   const trace = cpaTrace(response.headers)
@@ -756,7 +741,7 @@ export class CpaAdapter extends LlmAdapter {
         }
       }
     } catch {
-      // Routing is advisory; a stale or unavailable management API must not block chat.
+      // Management API failures must not block chat.
     }
 
     const imageRefs = requestImageRefs(options.messages)
@@ -802,7 +787,7 @@ export class CpaAdapter extends LlmAdapter {
     return cpaImageTarget(image)
   }
 
-  /** Whether a model takes image input; an unsynced model is trusted only when requested directly. */
+  // Trust an unsynced model only when explicitly requested.
   private acceptsImages(model: string, requested: boolean): boolean {
     const configured = this.options.getModels().find(entry => entry.id === model)
     if (configured === undefined) return requested

@@ -83,31 +83,23 @@ export interface CpaRuntimeContext {
 
 type Disposer = () => void | Promise<void>
 
-/** Services an injected scope carries; each injection site reads its own subset. */
 interface CpaInjectedScope extends SessionProjectionContext, ManagementWebScope {}
 
 interface SessionProjectionContext {
   sessionProjections: {
-    /**
-     * Current hosts resolve the unit asynchronously and report readiness
-     * through `catch`; older ones return nothing.
-     */
     register(projection: SessionProjection): ProjectionRegistration | void
   }
 }
 
-/** Observable outcome of an asynchronous projection registration. */
 interface ProjectionRegistration {
   catch(onRejected: (error: Error) => void): void
 }
 
 interface SessionProjection {
   key: string
-  /** Validates a persisted state row before it seeds a fold; restore fails without it. */
   stateSchema: ProjectionSchema<unknown>
   init(): CpaUsageProjection | null
   apply(state: CpaUsageProjection | null, event: CpaUsageEvent): CpaUsageProjection | null
-  /** Client view; omit to keep the unit host-only. */
   wire: {
     viewSchema: ProjectionSchema<unknown>
     view(state: CpaUsageProjection | null): CpaUsageProjection | null
@@ -121,14 +113,12 @@ interface CpaUsageEvent {
   data: ExecutionInput | null | undefined
 }
 
-/** Whether one committed session event carries a CPA execution record. */
 function isExecutionRecordType(type: string): boolean {
   return type === EXECUTION_RECORD_TYPE || type === LEGACY_EXECUTION_RECORD_TYPE
 }
 
 const MODEL_SYNC_RETRY_INITIAL_MS = 3_000
 
-/** Exponential backoff after failed model syncs, capped by the healthy refresh interval. */
 export function modelSyncRetryDelay(failures: number, refreshIntervalMs: number): number {
   const delay = MODEL_SYNC_RETRY_INITIAL_MS * 2 ** Math.max(0, failures - 1)
   return Math.min(delay, refreshIntervalMs)
@@ -639,15 +629,11 @@ export class CpaController {
           wire: {
             viewSchema: simpleProjectionSchema(),
             view: state => state,
-            // The status line reads this key on demand; session summaries do not.
             summary: false,
           },
-          // The fold gained a record type, so checkpoints written for the old
-          // spelling must refold instead of seeding a partial history.
+          // Version 1 checkpoints omit plugin records, so they must be rebuilt.
           stateVersion: 2,
         })
-        // Resolution is asynchronous on current hosts, where an unobserved
-        // rejection only reaches the registry's own log.
         if (registration !== undefined) {
           registration.catch((error: Error) => {
             this.ctx.logger?.warn?.(`dsh-cpa: projection registration failed: ${errorMessage(error)}`)
@@ -689,9 +675,7 @@ export class CpaController {
   }
 
   /**
-   * Refresh the model catalog. A newer sync aborts an older one, and a failed
-   * sync keeps the last good catalog so a transient CPA outage does not empty
-   * the model list.
+   * Cancels an in-flight sync and retains the catalog on failure.
    * @returns whether this sync installed a catalog.
    */
   async syncModels(baseURL = this.currentBaseURL(), apiKey = this.currentApiKey()): Promise<boolean> {

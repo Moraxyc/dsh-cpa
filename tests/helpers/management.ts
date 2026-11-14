@@ -2,7 +2,6 @@ import type { ManagementContext, ManagementWebScope } from '../../lib/server/man
 import { startServer } from './http.ts'
 import type { TestServer } from './http.ts'
 
-/** The web carrier the management panel registers its routes on. */
 export type RouteWebServer = ManagementWebScope['webServer']
 export type ManagementRoute = Parameters<RouteWebServer['register']>[0]
 
@@ -11,7 +10,6 @@ export interface RouteRecorder {
   readonly webServer: RouteWebServer
 }
 
-/** In-memory carrier that tracks which routes are currently registered on it. */
 export function createRouteRecorder(): RouteRecorder {
   const routes: ManagementRoute[] = []
   return {
@@ -34,13 +32,11 @@ export function findRoute(routes: readonly ManagementRoute[], path: string): Man
   return route
 }
 
-/** A scope bound to one carrier, plus the handle that releases everything its effects registered. */
 export interface CarrierScope {
   readonly scope: ManagementWebScope
   unload(): void
 }
 
-/** One scope per carrier: effects run on install and their releases run on `unload`. */
 export function createCarrierScope(webServer: RouteWebServer): CarrierScope {
   const releases: Array<() => void> = []
   return {
@@ -56,7 +52,6 @@ export function createCarrierScope(webServer: RouteWebServer): CarrierScope {
   }
 }
 
-/** Synchronous stand-in for the host inject seam: each injection runs its factory once. */
 export function injectedContext(webServer: RouteWebServer): ManagementContext {
   return {
     inject(_deps, factory) {
@@ -68,7 +63,6 @@ export function injectedContext(webServer: RouteWebServer): ManagementContext {
   }
 }
 
-/** Serves a single management route over real HTTP so handlers get genuine request and response objects. */
 export function serveRoute(route: ManagementRoute): Promise<TestServer> {
   return startServer((req, res) => route.handler(req, res))
 }

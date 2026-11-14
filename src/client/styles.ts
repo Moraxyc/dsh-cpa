@@ -1,4 +1,3 @@
-/** Styles shared by the status pill and the settings surfaces. */
 export const STYLE_ID = 'dsh-cpa-client'
 
 export const CLIENT_CSS = String.raw`
@@ -118,8 +117,6 @@ export const CLIENT_CSS = String.raw`
         .dsh-cpa-pill-meta {
           flex: 0 0 auto;
         }
-        /* CSS anchor placement above the pill; the panel sets its own
-           position-anchor, so no measurement pass runs before paint. */
         .dsh-cpa-dialog {
           position: fixed;
           z-index: 1100;
@@ -156,7 +153,6 @@ export const CLIENT_CSS = String.raw`
           min-height: 0;
           margin: 0;
         }
-        /* Narrow or short viewports: keep the panel inside the window. */
         @position-try --dsh-cpa-dialog-window {
           position-area: none;
           top: max(12px, var(--dsh-frame-overlay-top, 12px));
@@ -368,7 +364,6 @@ export const CLIENT_CSS = String.raw`
         }
       `
 
-/** Install or refresh the plugin stylesheet. */
 export function installStyles(): void {
   const existing = document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_ID}"]`)
   const style = existing ?? document.createElement('style')

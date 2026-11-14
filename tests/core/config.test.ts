@@ -23,20 +23,14 @@ import type { Config } from '../../lib/core/config.js'
 import { DEFAULT_ADVANCED_SETTINGS } from '../helpers/fixtures.ts'
 import { sendJson, startServer } from '../helpers/http.ts'
 
-/** A volatile profile field, read through `get()` as dsh exposes it. */
 type VolatileField<T> = { get: () => T }
 
 function volatile<T>(value: T): VolatileField<T> {
   return { get: () => value }
 }
 
-/**
- * A volatile profile field the user never set. dsh's `get()` yields `undefined` for it at
- * runtime, while the `Volatile<T>` type omits `undefined` for most fields; the resolver must
- * fall back to deployment options for these values.
- */
 function unsetVolatile<T>(): VolatileField<T> {
-  // SAFETY: unset profile fields read as undefined at runtime; the declared type under-describes this.
+  // SAFETY: unset host fields return undefined even when the declared type excludes it.
   return { get: () => undefined as T }
 }
 

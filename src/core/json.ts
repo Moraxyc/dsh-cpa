@@ -1,10 +1,3 @@
-/**
- * Boundary vocabulary for values that arrive from JSON payloads, query
- * parameters, or host state files. `JsonRecord` and `JsonValue` name the
- * recursive JSON shape so parsers can decode a payload once into a known
- * structure; callers never index raw `unknown`.
- */
-
 export interface JsonRecord {
   [key: string]: JsonValue
 }

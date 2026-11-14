@@ -28,7 +28,6 @@ import type { AccountView, QuotaMap } from './format.js'
 export type ReadoutTone = '' | 'warn' | 'error'
 export type ReadoutMode = 'quota' | 'model'
 
-/** Show the weekly window only at or below this remaining percent. */
 export const WEEKLY_WINDOW_REVEAL_PERCENT = 20
 
 export interface ModelSelectionLike {
@@ -37,7 +36,6 @@ export interface ModelSelectionLike {
   reasoningEffort?: string
 }
 
-/** Wire view of the session's `modelSelection` projection. */
 export interface SessionModelSelection {
   lastUsed: ModelSelectionLike | null
   next: ModelSelectionLike | null
@@ -187,7 +185,6 @@ function observedResetLabel(resetAt: number | undefined): string {
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
-/** Turn response-header observations into display windows, dropping resets already past. */
 export function observationWindows(
   observation: QuotaObservation | undefined,
   now = Date.now(),
@@ -209,10 +206,6 @@ export function observationWindows(
   return windows
 }
 
-/**
- * Response headers describe the account that just served a request, so they
- * win while they are newer than the management snapshot and still in-window.
- */
 export function currentQuotaWindows(
   execution: ExecutionRecord | null | undefined,
   quota: QuotaMap | undefined,

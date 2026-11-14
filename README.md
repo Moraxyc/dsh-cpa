@@ -31,7 +31,7 @@ npx @deepseek-ai/dsh plugin --profile headless add dsh-cpa
 在设置面板的 CPA 页面选择一种模式：
 
 - **自动启动（内部）**：默认模式。插件生成 `$DSH_HOME/cpa/config.yaml`，启动 `cli-proxy-api`，并自动注入所需的 key。
-- **已有 CPA（外部）**：填写 URL、API key 和 management key，然后点击“应用”。
+- **已有 CPA（外部）**：填写 URL、API key 和 management key，然后点击“保存”。
 
 CPA 的管理面板会在弹窗中打开。只有内部 CPA 运行时，才显示“停止”操作。
 
@@ -44,7 +44,7 @@ CPA 的管理面板会在弹窗中打开。只有内部 CPA 运行时，才显�
 ### 路由与故障切换
 
 - 你选择的模型永远是第一候选。
-- 只有在回复尚未输出任何内容时，遇到额度耗尽、限流、超时、服务端错误、网络错误、空响应或无法解析的响应，才会切换到下一个候选。可切换的错误类别取自 dsh 自身的重试分类，插件不再维护另一套清单。
+- 只有在回复尚未输出任何内容时，遇到额度耗尽、限流、超时、服务端错误、网络错误、空响应或无法解析的响应，才会切换到下一个候选。
 - 回复开始输出后不会重试，避免重复内容或重复执行副作用。
 - 高级设置中的“路由策略”（平衡、质量、可用性、额度优先）只影响候选排序，不改变 CPA 的账号切换。
 - 账号和凭据始终由 CPA 管理。CPA 管理接口暂时不可用时，插件使用最近一次的账号和额度快照做路由；没有快照时，仍优先保证请求可用，不会把查询失败显示为最新额度。
@@ -106,14 +106,14 @@ Codex 和 Claude 的额度来自推理响应头，只反映最近一次实际路
 | `src/server/` | 运行时、管理路由、数据汇总、额度查询 |
 | `src/client/` | 浏览器端：设置面板、状态行、输入框停靠 |
 | `lib/` | 构建产物，已被 git 忽略，不要手动修改 |
-| `tests/` | 测试，运行前会先构建 |
+| `tests/` | 测试 |
 
 ### 构建与检查
 
 ```sh
-npm run build                                   # tsc 编译 Server 端到 lib/，esbuild 打包 client 为 lib/client.js
-npm run check                                   # build + 客户端/测试类型检查 + oxlint
-npm test                                        # 先构建，再运行 tests/**/*.test.ts
+npm run build    # 编译服务端并打包浏览器端
+npm run check    # 构建、类型检查和 lint
+npm test         # 构建并运行测试
 ```
 
 从源码安装到本地 dsh：
@@ -155,6 +155,5 @@ headless profile 将 `web` 替换为 `headless`。
 
 - 浏览器只收到脱敏数据，不会收到 management key 或凭据字段。
 - 执行记录保存在 `$DSH_HOME/cpa/executions.json`，写入前已脱敏。
-- 会话日志中的执行记录使用插件记录类型 `plugin:dsh-cpa/execution`，并标记为 `ignorable`。当前 dsh 只容忍“未知类型且可忽略”的日志事件，其他写法会让整条会话在恢复时被拒绝。旧版本写入的 `cpa/execution` 事件插件仍会识别，以便旧版 dsh 读取的会话保留统计；但 dsh 0.2.2 及之后版本拒绝恢复包含这类非忽略型事件的会话。
+- 会话执行记录使用 `plugin:dsh-cpa/execution` 并标记为 `ignorable`，这样 dsh 不认识该类型时仍能恢复会话。插件也读取旧的 `cpa/execution` 记录，但 dsh 0.2.2 及之后版本无法恢复含有这种非忽略型记录的会话。
 - 旧版 `$DSH_HOME/cpa/settings.json` 只用于兼容读取。
-- 模型刷新间隔默认为 `300000` ms（`src/core/config.ts`）。

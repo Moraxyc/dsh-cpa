@@ -21,10 +21,8 @@ import { sendJson, startServer } from '../helpers/http.ts'
 
 const SYNC_TIMEOUT_TICK_MS = 20
 
-/** Persisted projection state as the host's schema sees it. */
 type ProjectionState = null | { requests: number }
 
-/** The slice of the projection unit the host registry restores and serves. */
 interface ProjectionDefinitionStub {
   key: string
   stateSchema?: { parse(state: ProjectionState): ProjectionState }
@@ -37,7 +35,6 @@ interface ProjectionDefinitionStub {
   stateVersion?: number
 }
 
-/** What the stub registry received from one registration. */
 interface ProjectionCapture {
   definition?: ProjectionDefinitionStub
   onRejected?: (error: Error) => void
@@ -60,7 +57,6 @@ describe('server/runtime', () => {
 
   it('model sync keeps the last catalog on failure and ignores superseded results', async () => {
     const warnings: string[] = []
-    // Each request is answered by whatever handler is current when it arrives.
     let respond: (res: ServerResponse) => void = res => sendJson(res, 200, { models: [{ slug: 'first' }] })
     const server = await startServer((_req, res) => respond(res))
     const controller = new CpaController({
@@ -84,7 +80,7 @@ describe('server/runtime', () => {
       assert.deepEqual(await modelIds(), ['first'])
       assert.equal(warnings.filter(message => message.includes('model sync failed')).length, 1)
 
-      // Hold the first sync open, then let a newer sync win before the older one answers.
+      // Older sync still pending.
       const held: Array<() => void> = []
       respond = res => {
         held.push(() => sendJson(res, 200, { models: [{ slug: 'stale' }] }))
@@ -122,7 +118,7 @@ describe('server/runtime', () => {
       logger: { warn: message => { warnings.push(String(message)) } },
       llm: { registerAdapter: () => () => {} },
       effect: () => {},
-      // SAFETY: the controller passes its own projection scope to the injection factory; the stub records the definition the real registry receives.
+      // SAFETY: the stub accepts the projection definition the controller registers.
       inject: ((_deps: readonly string[], factory: (injected: typeof scope) => void) => {
         factory(scope)
         return { dispose: () => {} }
@@ -133,24 +129,17 @@ describe('server/runtime', () => {
 
     const definition = captured.definition
     assert.equal(definition?.key, 'cpaUsage')
-    // A persisted row restores only through the state schema.
     assert.equal(definition?.stateSchema?.parse(null), null)
-    // Unrelated events keep the state reference, so the host drives no extra work.
     const state = { requests: 1 }
     assert.equal(definition?.apply?.(state, { type: 'turn/start' }), state)
-    // The status line reads the unit over the wire, which summaries must not carry.
     assert.equal(definition?.wire?.summary, false)
     assert.equal(definition?.wire?.view?.(null), null)
     assert.equal(definition?.wire?.viewSchema?.parse(state), state)
-    // Asynchronous registration failures reach the plugin log instead of staying unobserved.
     captured.onRejected?.(new Error('registry offline'))
     assert.ok(warnings.some(message => message.includes('projection registration failed: registry offline')))
   })
 
   it('records executions as ignorable plugin records a current host can still restore', async () => {
-    // The real store and record writer: a host reader refuses any event type it
-    // does not know unless the entry is ignorable, so the record must come from
-    // the plugin record namespace rather than the released event vocabulary.
     const store = new SessionStore(new Context())
     const target = sessionId('session-1')
     const session = store.create(SessionId(target), { meta: { cwd: '/' } })
@@ -172,7 +161,6 @@ describe('server/runtime', () => {
     const events = session.snapshotEvents()
     assert.equal(events.length, 1)
     assert.ok(events[0] !== undefined)
-    // `ignorable` plus an unknown type is the pair a host reader tolerates on restore.
     assert.equal(events[0].ignorable, true)
     assert.equal(KNOWN_SESSION_EVENT_TYPES.has(EXECUTION_RECORD_TYPE), false)
     const record = pluginRecordOf(events[0])
@@ -201,7 +189,7 @@ describe('server/runtime', () => {
       executionsPath: options.executionsPath,
     })
 
-    // Persisted settings win over deployment options, field by field.
+    // Persisted settings.
     const stored: CpaSettings = {
       mode: 'internal',
       externalUrl: 'http://saved.example/v1',

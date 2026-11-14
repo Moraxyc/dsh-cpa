@@ -104,7 +104,6 @@ export interface ManagementExecutionStore {
 export interface ManagementPanelOptions {
   baseURL: OptionSource<string>
   managementKey: OptionSource<string>
-  /** LLM provider route this plugin registers, compared with the session's selected provider. */
   provider?: OptionSource<string>
   getState?: () => CpaControllerState
   update?: (patch: JsonRecord) => Promise<CpaControllerState>
@@ -116,7 +115,6 @@ export interface ManagementPanelOptions {
   report?: () => Promise<CpaReport>
 }
 
-/** Web carrier surface an injected scope exposes to the management routes. */
 export interface ManagementWebScope {
   webServer: WebServer
   effect(task: () => () => void, label?: string): void
@@ -346,7 +344,6 @@ function executionStatusHandler(options: ManagementPanelOptions) {
         quota = await options.quotaService.status()
       }
     } catch {
-      // Quota is best-effort; keep the execution readout available.
     }
     let execution: ExecutionRecord | null = null
     let executions: ExecutionRecord[] = []
@@ -361,8 +358,6 @@ function executionStatusHandler(options: ManagementPanelOptions) {
       executions = []
     }
     sendJson(res, 200, {
-      // A missing management key only disables the account/quota snapshot; the
-      // session's execution record can still carry quota headers.
       available: Boolean(managementKey),
       route,
       accounts: quota.accounts,
@@ -581,11 +576,8 @@ function managementRoutes(options: ManagementPanelOptions): WebRoute[] {
 }
 
 /**
- * Serve the management routes on the current Web carrier. The callback reruns
- * when `webServer` is replaced, so the routes follow the listening server.
- * @param ctx - context that owns the injected fiber.
- * @param options - management panel dependencies.
- * @returns disposer releasing the injected fiber, settling once the routes are gone.
+ * Binds routes to `webServer` and rebinds when the carrier is replaced.
+ * @returns a disposer that removes routes from all carrier scopes.
  */
 export function installManagementPanel(
   ctx: ManagementContext,

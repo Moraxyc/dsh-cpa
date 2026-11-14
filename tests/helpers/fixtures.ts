@@ -2,13 +2,11 @@ import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 
 export type SessionId = NonNullable<GenerateOptions['sessionId']>
 
-/** Branded session ids are minted by the host; a test fixture brands a literal for one request. */
 export function sessionId(value: string): SessionId {
-  // SAFETY: stands in for the host's session minting; the brand is never inspected by these tests.
+  // SAFETY: tests use the literal only as an opaque session identifier.
   return value as SessionId
 }
 
-/** Advanced settings every field of which takes its documented default. */
 export const DEFAULT_ADVANCED_SETTINGS = {
   routingStrategy: 'balanced',
   dailyRequestLimit: 0,
@@ -22,7 +20,6 @@ export const DEFAULT_ADVANCED_SETTINGS = {
   quotaConcurrency: 4,
 } as const
 
-/** Unsigned ID token whose payload carries the ChatGPT account id, as CPA credentials do. */
 export function makeIdToken(accountId: string): string {
   return [
     'header',

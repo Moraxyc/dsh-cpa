@@ -1,5 +1,3 @@
-/** Wire contracts owned by the matching Host routes in this package. */
-
 export type CpaMode = 'internal' | 'external' | 'off'
 export type CpaRoutingStrategy = 'balanced' | 'quality' | 'availability' | 'quota'
 export type QuotaRisk = 'unknown' | 'critical' | 'warning' | 'normal'

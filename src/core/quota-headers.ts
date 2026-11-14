@@ -1,18 +1,15 @@
 import { isJsonRecord, isNonEmptyString, isNumber } from './json.js'
 import type { JsonValue } from './json.js'
 
-/**
- * A quota window seen in an inference response. `remainingPercent` is the
- * share left, not the share used. `resetAt` is epoch milliseconds.
- */
 export type CpaQuotaWindowObservation = {
   id: string
   label: string
   remainingPercent: number
+  /** Epoch milliseconds. */
   resetAt?: number
 }
 
-/** Quota from one upstream response, describing the account that served it. */
+/** Quota for the account that served one inference response. */
 export type CpaQuotaObservation = {
   provider: string
   windows: CpaQuotaWindowObservation[]
@@ -105,9 +102,8 @@ function claudeWindows(signals: ReadonlyMap<string, string>): CpaQuotaWindowObse
 }
 
 /**
- * Parse quota headers from one inference response. The model family only picks
- * which header set is tried first. The other set still counts, because a CPA
- * account can serve a model from another family.
+ * Parses quota headers even when their family differs from `model`, because
+ * the serving account can belong to another family.
  */
 export function quotaObservationFromHeaders(
   model: string,

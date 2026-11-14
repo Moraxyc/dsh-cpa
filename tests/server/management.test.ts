@@ -46,7 +46,6 @@ describe('server/management', () => {
     const install = factories[0]
     assert.ok(install)
 
-    // Every carrier owns its own routes, and they leave with the scope instead of the first carrier.
     const first = createRouteRecorder()
     const firstScope = createCarrierScope(first.webServer)
     install(firstScope.scope)

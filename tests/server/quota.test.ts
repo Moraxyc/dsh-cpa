@@ -344,7 +344,6 @@ describe('server/quota', () => {
           })
           return
         case '/v8/management/config/api-keys':
-          // Current CPA answers 404 when the configuration file omits the section.
           sendJson(res, 404, { error: 'not_found' })
           return
         default:

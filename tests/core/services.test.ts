@@ -20,7 +20,6 @@ describe('core/services', () => {
       const store = new CpaExecutionStore(filePath)
       await store.ensureLoaded()
 
-      // Built outside an object literal so the credential-looking field is not an excess-property error.
       const withSecret = {
         authIndex: 'auth-1',
         sessionId: 's1',

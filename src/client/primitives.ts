@@ -79,18 +79,15 @@ export interface SettingsFieldState {
   text: string
   /** Whether saving would leave a user-layer override for the field. */
   overridden?: boolean
-  /** Whether the draft is not a value the field accepts; the save stays blocked. */
   invalid?: boolean
 }
 
 export interface FormShell {
-  /** False while the Host does not serve this namespace; the entry renders nothing. */
   available?: boolean
   writable: boolean
   dirty?: boolean
   invalid?: boolean
   saving: boolean
-  /** Whether the last save did not land as staged. */
   failed?: boolean
 }
 
@@ -151,7 +148,6 @@ export type UseDismissOnOutsidePointer = (
   panelRef: React.RefObject<Element | null>,
 ) => void
 
-/** Browser module-table exports this plugin consumes. */
 export interface ClientPrimitives {
   Button: React.ComponentType<ButtonProps>
   Modal: React.ComponentType<ModalProps>

@@ -1,4 +1,3 @@
-# dsh-cpa owns the `cpa` provider route.
 - insert:
     - id: dsh-cpa
       name: dsh-cpa

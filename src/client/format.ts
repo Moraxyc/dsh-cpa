@@ -62,7 +62,6 @@ const PROVIDER_FAMILIES = new Map<string, string>([
   ['aistudio', 'google'],
 ])
 
-/** Collapse CPA account providers and model-derived providers to one family. */
 export function providerFamily(provider: string | undefined): string {
   const key = String(provider ?? '').toLowerCase()
   if (key === '' || key === 'unknown') return ''

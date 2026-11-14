@@ -6,7 +6,6 @@ import { activeSelection, detailGroups, readoutPresentation } from './readout.js
 import type { DetailGroup, SessionModelSelection } from './readout.js'
 import { clientRuntime } from './runtime.js'
 
-/** CSS anchor name shared by a pill trigger and its portaled dialog. */
 const DIALOG_ANCHOR_PREFIX = '--dsh-cpa-dock-'
 
 export interface CpaDockProps {
@@ -32,7 +31,6 @@ interface ReadoutDialogState {
   anchorRef: React.RefObject<HTMLSpanElement | null>
   open: boolean
   panelRef: React.RefObject<HTMLDivElement | null>
-  /** Anchor name the panel resolves its placement against. */
   anchorName: string
   setOpen: (open: boolean) => void
 }
@@ -94,7 +92,7 @@ export function CpaDock(props: CpaDockProps): React.ReactElement | null {
         const body = await fetchExecutionStatus(props.sessionId ?? '')
         if (!cancelled) setReadout(body)
       } catch {
-        // The readout is best-effort; keep the last successful snapshot.
+        // A failed refresh must not hide the last successful readout.
       }
     }
     void refresh()
@@ -198,7 +196,6 @@ export function CpaDock(props: CpaDockProps): React.ReactElement | null {
   return React.createElement('span', {
     ref: anchorRef,
     className: 'dsh-cpa-dock',
-    // The pill is the dialog's CSS anchor, so placement needs no measurement pass.
     style: { anchorName },
   }, trigger, dialog)
 }

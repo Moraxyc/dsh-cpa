@@ -54,13 +54,9 @@ const PROFILE_FIELDS = [
 ] as const
 
 /**
- * Import the pre-0.1.7 settings file into the active profile once. The
- * profile's existing user layer wins field by field, so a user who already
- * edited the new form is never overwritten by the compatibility import.
- *
- * @returns the fields written to the profile, an empty object when the
- * profile was available but no write was needed, or undefined when migration
- * could not run and the caller should keep the legacy fallback.
+ * Imports legacy settings without overwriting the profile's user fields or secrets.
+ * @returns the imported fields, an empty object if no write was needed, or
+ * undefined if the caller must keep the legacy fallback.
  */
 export async function migrateLegacySettings(
   ctx: CpaRuntimeContext,
@@ -100,7 +96,6 @@ export async function migrateLegacySettings(
   }
 }
 
-/** Start the CPA runtime and bind live profile configuration to it. */
 export async function apply(ctx: CpaRuntimeContext, config: Config) {
   const options = resolveOptionsFromConfig(config)
   let persisted: CpaSettings | undefined

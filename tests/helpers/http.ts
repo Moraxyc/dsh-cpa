@@ -10,11 +10,8 @@ import type { AddressInfo } from 'node:net'
 
 import type { JsonValue } from '../../lib/core/json.js'
 
-/** Loopback HTTP server on an ephemeral port, standing in for a CPA management API. */
 export interface TestServer {
-  /** `http://127.0.0.1:<port>`, for building request URLs. */
   readonly origin: string
-  /** `origin` plus `/v1`, the base URL shape adapters and services are configured with. */
   readonly baseURL: string
   close(): Promise<void>
 }
@@ -57,10 +54,7 @@ export async function readText(req: IncomingMessage): Promise<string> {
   return text
 }
 
-/**
- * Parses a response body whose shape the calling test defines and then asserts field by field.
- */
 export async function readJson<T>(response: Response): Promise<T> {
-  // SAFETY: the body is produced by the code under test; each caller asserts the fields it reads.
+  // SAFETY: each caller asserts the response fields it reads.
   return (await response.json()) as T
 }

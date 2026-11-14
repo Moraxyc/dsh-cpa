@@ -87,13 +87,6 @@ export interface CpaSettingsInput {
   quotaConcurrency?: ConfigScalar
 }
 
-/**
- * Host configuration for the CPA plugin.
- *
- * Deployment wiring stays ordinary configuration. Values users may change in
- * the web client's Plugins page are volatile fields, so the Host can validate
- * and persist them through dsh's profile-backed configuration forms.
- */
 export interface Config {
   provider: string
   apiKey?: string
@@ -123,7 +116,6 @@ export interface Config {
   quotaConcurrency: Volatile<number>
 }
 
-/** Schema consumed by the Host loader and projected into dsh configuration forms. */
 export const Config = z.object({
   provider: z.string().default('cpa'),
   apiKey: z.string().role('secret'),
@@ -400,7 +392,6 @@ export function normalizeModels(data: readonly JsonValue[]): CpaModel[] {
   const seen = new Set<string>()
   for (const entry of data) {
     if (!isJsonRecord(entry)) continue
-    // The Codex catalog marks deprecated or internal models as hidden.
     if (entry.visibility === 'hide') continue
     const id = isNonEmptyString(entry.id)
       ? entry.id
@@ -435,7 +426,6 @@ export function normalizeModels(data: readonly JsonValue[]): CpaModel[] {
 
 const MAX_MODEL_CATALOG_BYTES = 4 * 1024 * 1024
 
-/** Parse a JSON body, refusing payloads larger than `maxBytes` before buffering them. */
 export async function readBoundedJson(response: Response, maxBytes: number): Promise<JsonValue> {
   const tooLarge = () => new Error(`response exceeds ${maxBytes} bytes`)
   const declared = Number(response.headers.get('content-length') ?? Number.NaN)
@@ -562,7 +552,6 @@ export async function resolveCpaBinary(bin: string): Promise<string | undefined>
       await access(candidate, constants.X_OK)
       return candidate
     } catch {
-      // Try the next PATH entry.
     }
   }
   return undefined
@@ -652,7 +641,6 @@ function volatileValue<T extends string | number | boolean>(value: Volatile<T | 
   return (value.get() as T | undefined) ?? fallback
 }
 
-/** Resolve the ordinary runtime options from the Host Config object. */
 export function resolveOptionsFromConfig(config: Config): CpaOptions {
   return resolveOptions({
     provider: config.provider,
@@ -676,10 +664,6 @@ export function resolveOptionsFromConfig(config: Config): CpaOptions {
   })
 }
 
-/**
- * Read the user-editable settings with the runtime's fallbacks, so a profile
- * reset matches the defaults the runtime uses.
- */
 export function resolveCpaSettingsFromConfig(config: Config, options: CpaOptions): CpaSettings {
   return {
     mode: volatileValue(config.mode, options.url ? 'external' : 'internal'),

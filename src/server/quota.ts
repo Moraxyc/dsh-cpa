@@ -653,8 +653,7 @@ export async function fetchApiProviders(baseURL: string, managementKey: string):
   try {
     body = await managementApi(baseURL, managementKey, CPA_API_KEYS_CONFIG_PATH)
   } catch (error) {
-    // Current CPA answers 404 for a configuration section the file omits, and
-    // an OAuth-only install has no upstream API-key groups at all.
+    // CPA returns 404 when the config omits this section.
     if (error instanceof ManagementApiError && error.status === 404) return []
     throw error
   }
@@ -729,7 +728,6 @@ export async function managementApiWithHeaders(
   return { body, headers: response.headers }
 }
 
-/** A management read that did not return a usable body. */
 export class ManagementApiError extends Error {
   readonly status: number
 
@@ -995,13 +993,11 @@ export class CpaQuotaService {
     try {
       await this.ensureAccounts(now)
     } catch {
-      // Keep the last sanitized snapshot usable when management is temporarily offline.
       return this.snapshot()
     }
     try {
       await this.refreshQuota(now)
     } catch {
-      // Quota is best-effort; keep cached account data available.
     }
     return this.snapshot()
   }
