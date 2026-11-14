@@ -96,11 +96,6 @@ function accountRank(account: AccountView): number {
   return (unavailable ? 0 : 1_000_000) + priority * 1_000 + Math.min(success, 999)
 }
 
-/**
- * Pick the account this session is most likely using. A recorded execution
- * names the serving account. Otherwise the model's provider family narrows the list,
- * and accounts that report quota win.
- */
 export function readoutAccount(
   accounts: readonly CpaAccountPublic[],
   quota: QuotaMap | undefined,
@@ -134,7 +129,6 @@ function familyAccount(
   return [...preferred].sort((left, right) => accountRank(right) - accountRank(left))[0]
 }
 
-/** Currently used quota windows: 5h always, 7d only while it is low. */
 export function displayedQuotaWindows(windows: readonly QuotaWindow[]): QuotaWindow[] {
   const valued = windows.filter(window => windowPercent(window) !== null)
   if (valued.length === 0) return []
