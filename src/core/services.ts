@@ -365,9 +365,7 @@ export class CpaExecutionStore {
         if (record === undefined) continue
         this.ingest(record)
       }
-    } catch {
-      // Unreadable local history must not prevent agent execution.
-    }
+    } catch {}
   }
 
   ingest(record: ExecutionRecord): void {

@@ -18,7 +18,7 @@ export const SUMMARY_REFRESH_MS = 60_000
 export const MAX_SUMMARY_MODELS = 8
 
 export interface ExecutionStatusResponse {
-  /** Whether a management key is configured. Execution quota may exist without one. */
+  /** Whether a management key is configured. */
   available: boolean
   route?: string
   accounts: CpaAccountPublic[]

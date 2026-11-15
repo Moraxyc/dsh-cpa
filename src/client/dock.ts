@@ -91,9 +91,7 @@ export function CpaDock(props: CpaDockProps): React.ReactElement | null {
       try {
         const body = await fetchExecutionStatus(props.sessionId ?? '')
         if (!cancelled) setReadout(body)
-      } catch {
-        // A failed refresh must not hide the last successful readout.
-      }
+      } catch {}
     }
     void refresh()
     const timer = setInterval(() => { void refresh() }, READOUT_REFRESH_MS)
@@ -107,8 +105,7 @@ export function CpaDock(props: CpaDockProps): React.ReactElement | null {
   const accounts: readonly CpaAccountPublic[] = readout?.accounts ?? []
   const visible = shouldShowReadout(readout, execution, selection)
   const presentation = visible ? readoutPresentation(accounts, readout?.quota, execution, selection) : null
-  // An older Host omits `route`. Without an execution, only a model that resolved
-  // to a CPA account proves the session is on CPA.
+  // Older hosts omit `route`. Sessions without executions require an account-backed model.
   const shown = presentation !== null
     && presentation.primary !== ''
     && (execution !== null && execution !== undefined

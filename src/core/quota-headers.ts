@@ -101,10 +101,7 @@ function claudeWindows(signals: ReadonlyMap<string, string>): CpaQuotaWindowObse
   return windows
 }
 
-/**
- * Parses quota headers even when their family differs from `model`, because
- * the serving account can belong to another family.
- */
+/** Parses quota headers across provider families; the serving account may differ from `model`. */
 export function quotaObservationFromHeaders(
   model: string,
   headers: Headers,

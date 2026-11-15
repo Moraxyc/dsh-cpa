@@ -189,7 +189,6 @@ describe('server/runtime', () => {
       executionsPath: options.executionsPath,
     })
 
-    // Persisted settings.
     const stored: CpaSettings = {
       mode: 'internal',
       externalUrl: 'http://saved.example/v1',

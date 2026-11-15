@@ -274,7 +274,7 @@ function routePrefix(id: string): string {
   return slash > 0 ? id.slice(0, slash) : ''
 }
 
-// Include routes in colliding names because dsh selectors show only the name.
+// dsh selectors display only model names; qualify collisions with routes.
 function modelNames(models: readonly CpaModel[]): Map<string, string> {
   const groups = new Map<string, CpaModel[]>()
   for (const model of models) {
@@ -740,9 +740,7 @@ export class CpaAdapter extends LlmAdapter {
           models = [...new Set([options.model, ...resolved.models])]
         }
       }
-    } catch {
-      // Management API failures must not block chat.
-    }
+    } catch {}
 
     const imageRefs = requestImageRefs(options.messages)
     let images: CpaRequestImages | undefined
@@ -787,7 +785,6 @@ export class CpaAdapter extends LlmAdapter {
     return cpaImageTarget(image)
   }
 
-  // Trust an unsynced model only when explicitly requested.
   private acceptsImages(model: string, requested: boolean): boolean {
     const configured = this.options.getModels().find(entry => entry.id === model)
     if (configured === undefined) return requested
@@ -940,9 +937,7 @@ export class CpaAdapter extends LlmAdapter {
   private async reportExecution(execution: CpaExecutionEvent): Promise<void> {
     try {
       await this.options.onExecution?.(execution)
-    } catch {
-      // Execution telemetry must not replace the provider result.
-    }
+    } catch {}
   }
 }
 

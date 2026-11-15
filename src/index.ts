@@ -54,9 +54,8 @@ const PROFILE_FIELDS = [
 ] as const
 
 /**
- * Imports legacy settings without overwriting the profile's user fields or secrets.
- * @returns the imported fields, an empty object if no write was needed, or
- * undefined if the caller must keep the legacy fallback.
+ * Migrates legacy settings into unset profile fields. Returns undefined on
+ * inspection or update failure.
  */
 export async function migrateLegacySettings(
   ctx: CpaRuntimeContext,
