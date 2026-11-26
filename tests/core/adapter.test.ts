@@ -17,6 +17,7 @@ import type {
 
 import {
   assertUsableApiKey,
+  chatCompletionsUrl,
   CpaAdapter,
   cpaImageTarget,
   parseCpaTraceId,
@@ -34,7 +35,7 @@ import type {
   WireMessage,
   WireRequest,
 } from '../../lib/core/adapter.js'
-import { normalizeModels } from '../../lib/core/config.js'
+import { normalizeModels } from '../../lib/server/backend.js'
 import { sessionId } from '../helpers/fixtures.ts'
 import { readText, sendJson, startServer } from '../helpers/http.ts'
 
@@ -116,6 +117,17 @@ function textContent(message: WireMessage): string {
 }
 
 describe('core/adapter', () => {
+  it('keeps the v1 prefix stable for chat completions URLs', () => {
+    assert.equal(
+      chatCompletionsUrl('http://127.0.0.1:8317/v1'),
+      'http://127.0.0.1:8317/v1/chat/completions',
+    )
+    assert.equal(
+      chatCompletionsUrl('http://127.0.0.1:8317'),
+      'http://127.0.0.1:8317/v1/chat/completions',
+    )
+  })
+
   it('parseCpaTraceId reads the auth index and request id, and rejects malformed ids', () => {
     const parsed = parseCpaTraceId(TRACE_ID)
     assert.ok(parsed)

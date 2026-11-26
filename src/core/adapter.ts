@@ -33,12 +33,16 @@ import type {
   ToolCallBlock,
   ToolSchema,
 } from '@deepseek-ai/dsh-llm'
-import { chatCompletionsUrl } from './config.js'
 import type { CpaModel } from './config.js'
 import { isFunction, isJsonRecord, isNonEmptyString, isString } from './json.js'
 import { quotaObservationFromHeaders } from './quota-headers.js'
 import type { CpaQuotaObservation } from './quota-headers.js'
 import type { CpaRoutePlan, CpaPreflightResult } from './router.js'
+
+export function chatCompletionsUrl(baseURL: string): string {
+  const base = baseURL.replace(/\/+$/, '')
+  return base.endsWith('/v1') ? `${base}/chat/completions` : `${base}/v1/chat/completions`
+}
 
 const DONE = '[DONE]'
 const EMPTY_RESPONSE = EMPTY_RESPONSE_CODE

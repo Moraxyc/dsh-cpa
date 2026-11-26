@@ -1,12 +1,13 @@
 import {
   readCpaSettings,
   resolveCpaSettingsFromConfig,
+  resolveInitialCpaSettings,
   resolveOptionsFromConfig,
 } from './core/config.js'
 import type { Config, CpaSettings } from './core/config.js'
 import { isError, isJsonRecord } from './core/json.js'
 import type { JsonRecord } from './core/json.js'
-import { CpaController, resolveInitialCpaSettings } from './server/runtime.js'
+import { CpaController } from './server/runtime.js'
 import type { CpaRuntimeContext } from './server/runtime.js'
 
 export { Config } from './core/config.js'

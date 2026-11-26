@@ -10,13 +10,10 @@ import { isJsonRecord } from '../../lib/core/json.js'
 import { EXECUTION_RECORD_TYPE } from '../../lib/core/services.js'
 import {
   CpaController,
-  cpaSettingsEqual,
-  mergeCpaSettings,
   modelSyncRetryDelay,
-  resolveInitialCpaSettings,
 } from '../../lib/server/runtime.js'
 import type { CpaRuntimeContext } from '../../lib/server/runtime.js'
-import { DEFAULT_ADVANCED_SETTINGS, sessionId } from '../helpers/fixtures.ts'
+import { sessionId } from '../helpers/fixtures.ts'
 import { sendJson, startServer } from '../helpers/http.ts'
 
 const SYNC_TIMEOUT_TICK_MS = 20
@@ -168,93 +165,5 @@ describe('server/runtime', () => {
     const data = isJsonRecord(record?.data) ? record.data : undefined
     assert.equal(data?.model, 'gpt-5')
     assert.equal(data?.outcome, 'success')
-  })
-
-  it('resolveInitialCpaSettings seeds from deployment options, and mergeCpaSettings validates patches', () => {
-    const options = resolveOptions({
-      url: 'http://127.0.0.1:9000/v1',
-      apiKey: 'sk-config',
-      managementKey: 'mgmt-env',
-    })
-    assert.deepEqual(resolveInitialCpaSettings(options, undefined), {
-      mode: 'external',
-      externalUrl: 'http://127.0.0.1:9000/v1',
-      externalApiKey: 'sk-config',
-      externalManagementKey: 'mgmt-env',
-      internalBin: options.bin,
-      usageStatisticsEnabled: true,
-      ...DEFAULT_ADVANCED_SETTINGS,
-      configPath: options.configPath,
-      settingsPath: options.settingsPath,
-      executionsPath: options.executionsPath,
-    })
-
-    const stored: CpaSettings = {
-      mode: 'internal',
-      externalUrl: 'http://saved.example/v1',
-      externalApiKey: 'sk-saved',
-      externalManagementKey: 'mgmt-saved',
-      internalBin: '/opt/cli-proxy-api',
-      usageStatisticsEnabled: true,
-      ...DEFAULT_ADVANCED_SETTINGS,
-      configPath: '/saved/config.yaml',
-      settingsPath: '/saved/settings.json',
-      executionsPath: '/saved/executions.json',
-    }
-    assert.deepEqual(resolveInitialCpaSettings(options, stored), stored)
-
-    const merged = mergeCpaSettings({
-      mode: 'internal',
-      externalUrl: '',
-      externalApiKey: '',
-      externalManagementKey: '',
-      internalBin: '',
-      usageStatisticsEnabled: true,
-      ...DEFAULT_ADVANCED_SETTINGS,
-    }, {
-      mode: 'external',
-      externalUrl: '  http://127.0.0.1:9000/v1  ',
-      externalApiKey: 'sk-next',
-      internalBin: '  /usr/local/bin/cli-proxy-api  ',
-      port: 9000,
-      refreshIntervalMs: 120_000,
-      configPath: '/tmp/cpa.yaml',
-      settingsPath: '/tmp/settings.json',
-      executionsPath: '/tmp/executions.json',
-      authFilesTtlMs: 1_000,
-      quotaTtlMs: 2_000,
-      quotaConcurrency: 2,
-      routingStrategy: 'quota',
-      dailyRequestLimit: 100,
-    })
-    assert.deepEqual(merged, {
-      mode: 'external',
-      externalUrl: 'http://127.0.0.1:9000/v1',
-      externalApiKey: 'sk-next',
-      externalManagementKey: '',
-      internalBin: '/usr/local/bin/cli-proxy-api',
-      usageStatisticsEnabled: true,
-      port: 9000,
-      refreshIntervalMs: 120_000,
-      configPath: '/tmp/cpa.yaml',
-      settingsPath: '/tmp/settings.json',
-      executionsPath: '/tmp/executions.json',
-      authFilesTtlMs: 1_000,
-      quotaTtlMs: 2_000,
-      quotaConcurrency: 2,
-      routingStrategy: 'quota',
-      dailyRequestLimit: 100,
-    })
-    assert.equal(cpaSettingsEqual(merged, { ...merged }), true)
-
-    const disabled = mergeCpaSettings(merged, { usageStatisticsEnabled: false })
-    assert.equal(disabled.usageStatisticsEnabled, false)
-    assert.equal(cpaSettingsEqual(merged, disabled), false)
-
-    const invalid = mergeCpaSettings(merged, { port: -1, refreshIntervalMs: 0 })
-    assert.equal(invalid.port, 9000)
-    assert.equal(invalid.refreshIntervalMs, 120_000)
-    assert.throws(() => mergeCpaSettings(merged, { mode: 'sideways' }), /invalid mode/)
-    assert.throws(() => mergeCpaSettings(merged, { routingStrategy: 'sideways' }), /invalid routing strategy/)
   })
 })

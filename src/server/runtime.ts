@@ -10,33 +10,27 @@ interface HostPathMapper {
 }
 import {
   assertCpaBinary,
-  DEFAULT_AUTH_FILES_TTL_MS,
-  DEFAULT_DAILY_REQUEST_LIMIT,
-  DEFAULT_PORT,
-  DEFAULT_QUOTA_CONCURRENCY,
-  DEFAULT_QUOTA_TTL_MS,
-  DEFAULT_REFRESH_MS,
-  DEFAULT_ROUTING_STRATEGY,
   fetchModels,
-  positiveNumber,
   randomKey,
   spawnCpa,
   stopChild,
   waitForCpa,
-  writeCpaSettings,
   writeManagedConfig,
+} from './backend.js'
+import type { ChildHandle } from './backend.js'
+import {
+  cpaSettingsEqual,
+  mergeCpaSettings,
+  writeCpaSettings,
 } from '../core/config.js'
 import type {
-  ChildHandle,
-  ConfigScalar,
   CpaMode,
   CpaModel,
   CpaOptions,
-  CpaRoutingStrategy,
   CpaSettings,
 } from '../core/config.js'
-import { isBoolean, isError, isNumber, isString } from '../core/json.js'
-import type { JsonRecord, JsonValue } from '../core/json.js'
+import { isError } from '../core/json.js'
+import type { JsonRecord } from '../core/json.js'
 import {
   aggregateCpaUsage,
   CpaExecutionStore,
@@ -128,26 +122,6 @@ function internalBaseURL(options: CpaOptions, port = options.port): string {
   return `http://${options.host}:${port}/v1`
 }
 
-function positiveInteger(value: ConfigScalar, fallback: number): number {
-  const parsed = Number(value)
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
-}
-
-function nonNegativeNumber(value: ConfigScalar, fallback: number): number {
-  const parsed = Number(value)
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback
-}
-
-function routingStrategy(value: JsonValue | undefined, fallback: CpaRoutingStrategy): CpaRoutingStrategy {
-  return value === 'quality' || value === 'availability' || value === 'quota' || value === 'balanced'
-    ? value
-    : fallback
-}
-
-function scalar(value: JsonValue | undefined): ConfigScalar {
-  return isString(value) || isNumber(value) || isBoolean(value) || value === null ? value : undefined
-}
-
 function errorMessage(cause: unknown): string {
   return isError(cause) ? cause.message : String(cause)
 }
@@ -182,131 +156,6 @@ function diagnosticsStatus(
   if (!active) return 'unavailable'
   if (checks.some(check => check.status === 'fail')) return 'warning'
   return checks.every(check => check.status === 'pass') ? 'healthy' : 'warning'
-}
-
-export function resolveInitialCpaSettings(
-  options: CpaOptions,
-  persisted: CpaSettings | undefined,
-  configured?: Partial<CpaSettings>,
-  preferConfigured = false,
-): CpaSettings {
-  const initial: CpaSettings = {
-    mode: options.url ? 'external' : 'internal',
-    externalUrl: options.url || '',
-    externalApiKey: options.apiKey || '',
-    externalManagementKey: options.managementKey,
-    internalBin: options.bin || '',
-    usageStatisticsEnabled: true,
-    routingStrategy: DEFAULT_ROUTING_STRATEGY,
-    dailyRequestLimit: DEFAULT_DAILY_REQUEST_LIMIT,
-    refreshIntervalMs: options.refreshIntervalMs ?? DEFAULT_REFRESH_MS,
-    port: options.port ?? DEFAULT_PORT,
-    configPath: options.configPath || '',
-    settingsPath: options.settingsPath || '',
-    executionsPath: options.executionsPath || '',
-    authFilesTtlMs: options.authFilesTtlMs ?? DEFAULT_AUTH_FILES_TTL_MS,
-    quotaTtlMs: options.quotaTtlMs ?? DEFAULT_QUOTA_TTL_MS,
-    quotaConcurrency: options.quotaConcurrency ?? DEFAULT_QUOTA_CONCURRENCY,
-  }
-  if (persisted === undefined && configured === undefined) return initial
-
-  if (preferConfigured && configured !== undefined) {
-    const settings = {
-      ...initial,
-      ...configured,
-    }
-    if (settings.mode === 'external' && !settings.externalUrl) {
-      settings.mode = options.url ? 'external' : 'internal'
-      settings.externalUrl = options.url || ''
-    }
-    return settings
-  }
-
-  if (persisted === undefined) {
-    return {
-      ...initial,
-      ...configured,
-    }
-  }
-
-  const settings: CpaSettings = {
-    mode: persisted.mode,
-    externalUrl: persisted.externalUrl || options.url || '',
-    externalApiKey: persisted.externalApiKey || initial.externalApiKey || '',
-    externalManagementKey: persisted.externalManagementKey || initial.externalManagementKey || '',
-    internalBin: persisted.internalBin || initial.internalBin || '',
-    usageStatisticsEnabled: persisted.usageStatisticsEnabled !== false,
-    routingStrategy: routingStrategy(persisted.routingStrategy, initial.routingStrategy),
-    dailyRequestLimit: persisted.dailyRequestLimit ?? initial.dailyRequestLimit,
-    refreshIntervalMs: persisted.refreshIntervalMs || initial.refreshIntervalMs,
-    port: persisted.port || initial.port,
-    configPath: persisted.configPath || initial.configPath,
-    settingsPath: persisted.settingsPath || initial.settingsPath,
-    executionsPath: persisted.executionsPath || initial.executionsPath,
-    authFilesTtlMs: persisted.authFilesTtlMs || initial.authFilesTtlMs,
-    quotaTtlMs: persisted.quotaTtlMs || initial.quotaTtlMs,
-    quotaConcurrency: persisted.quotaConcurrency || initial.quotaConcurrency,
-  }
-  if (settings.mode === 'external' && !settings.externalUrl) {
-    settings.mode = options.url ? 'external' : 'internal'
-    settings.externalUrl = options.url || ''
-  }
-  return settings
-}
-
-export function mergeCpaSettings(current: CpaSettings, patch: JsonRecord): CpaSettings {
-  const next = { ...current }
-  const mode = patch.mode
-  if (mode === 'internal' || mode === 'external' || mode === 'off') {
-    next.mode = mode
-  } else if (mode !== undefined) {
-    throw new Error('invalid mode')
-  }
-  if (isString(patch.externalUrl)) next.externalUrl = patch.externalUrl.trim()
-  if (isString(patch.externalApiKey)) next.externalApiKey = patch.externalApiKey
-  if (isString(patch.externalManagementKey)) next.externalManagementKey = patch.externalManagementKey
-  if (isString(patch.internalBin)) next.internalBin = patch.internalBin.trim()
-  if (isBoolean(patch.usageStatisticsEnabled)) next.usageStatisticsEnabled = patch.usageStatisticsEnabled
-  if (patch.routingStrategy !== undefined) {
-    if (patch.routingStrategy === 'balanced' || patch.routingStrategy === 'quality'
-      || patch.routingStrategy === 'availability' || patch.routingStrategy === 'quota') {
-      next.routingStrategy = patch.routingStrategy
-    } else {
-      throw new Error('invalid routing strategy')
-    }
-  }
-  if (patch.dailyRequestLimit !== undefined) {
-    next.dailyRequestLimit = nonNegativeNumber(scalar(patch.dailyRequestLimit), next.dailyRequestLimit)
-  }
-  if (patch.refreshIntervalMs !== undefined) next.refreshIntervalMs = positiveNumber(scalar(patch.refreshIntervalMs), next.refreshIntervalMs)
-  if (patch.port !== undefined) next.port = positiveInteger(scalar(patch.port), next.port)
-  if (patch.authFilesTtlMs !== undefined) next.authFilesTtlMs = positiveNumber(scalar(patch.authFilesTtlMs), next.authFilesTtlMs)
-  if (patch.quotaTtlMs !== undefined) next.quotaTtlMs = positiveNumber(scalar(patch.quotaTtlMs), next.quotaTtlMs)
-  if (patch.quotaConcurrency !== undefined) next.quotaConcurrency = positiveInteger(scalar(patch.quotaConcurrency), next.quotaConcurrency)
-  for (const key of ['configPath', 'settingsPath', 'executionsPath'] as const) {
-    const value = patch[key]
-    if (isString(value) && value.trim() !== '') next[key] = value.trim()
-  }
-  return next
-}
-
-export function cpaSettingsEqual(left: CpaSettings, right: CpaSettings): boolean {
-  return left.mode === right.mode
-    && left.externalUrl === right.externalUrl
-    && left.externalApiKey === right.externalApiKey
-    && left.externalManagementKey === right.externalManagementKey
-    && left.internalBin === right.internalBin
-    && left.usageStatisticsEnabled === right.usageStatisticsEnabled
-    && left.routingStrategy === right.routingStrategy
-    && left.dailyRequestLimit === right.dailyRequestLimit
-    && left.refreshIntervalMs === right.refreshIntervalMs
-    && left.port === right.port
-    && left.configPath === right.configPath
-    && left.settingsPath === right.settingsPath
-    && left.executionsPath === right.executionsPath
-    && left.authFilesTtlMs === right.authFilesTtlMs
-    && left.quotaTtlMs === right.quotaTtlMs
-    && left.quotaConcurrency === right.quotaConcurrency
 }
 
 export class CpaController {
