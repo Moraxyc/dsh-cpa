@@ -1,9 +1,9 @@
 import {
-  assertUsableApiKey,
   attributionHeaders,
   ToolCallId,
   contentHasImage,
   EMPTY_RESPONSE_CODE,
+  INVALID_CREDENTIAL_CODE,
   isContextWindowExceededError,
   isQuotaExceededError,
   LlmAdapter,
@@ -230,6 +230,7 @@ function providerRetryAfterMs(value: string | null): number | undefined {
 
 function requestId(headers: Headers): ProviderRequestId | undefined {
   const value = headers.get('x-request-id')
+    ?? headers.get('openai-request-id')
     ?? headers.get('x-cpa-request-id')
     ?? headers.get('x-cli-proxy-request-id')
   return value === null || value.length === 0 ? undefined : ProviderRequestId(value)
@@ -665,10 +666,18 @@ async function readError(response: Response): Promise<never> {
     const error = isJsonRecord(parsed?.error) ? parsed.error : null
     message = isNonEmptyString(error?.message)
       ? error.message
-      : isNonEmptyString(parsed?.message)
-        ? parsed.message
-        : message
-    detail = [error?.code, error?.type, error?.message, parsed?.message]
+      : isNonEmptyString(parsed?.error)
+        ? parsed.error
+        : isNonEmptyString(parsed?.message)
+          ? parsed.message
+          : message
+    detail = [
+      error?.code,
+      error?.type,
+      error?.message,
+      isString(parsed?.error) ? parsed.error : undefined,
+      parsed?.message,
+    ]
       .filter((value): value is string => isString(value))
       .join(' ')
   } catch {
@@ -817,11 +826,12 @@ export class CpaAdapter extends LlmAdapter {
     const url = chatCompletionsUrl(this.options.baseURL)
     const body = serializeRequest(options, images)
     const payload = JSON.stringify(body)
-    const headers = {
-      authorization: `Bearer ${apiKey}`,
-      'content-type': 'application/json',
-      accept: 'text/event-stream',
-      ...attributionHeaders(),
+    const headers = new Headers(attributionHeaders())
+    headers.set('authorization', `Bearer ${apiKey}`)
+    headers.set('content-type', 'application/json')
+    headers.set('accept', 'text/event-stream')
+    if (options.sessionId !== undefined && String(options.sessionId) !== '') {
+      headers.set('x-session-id', String(options.sessionId))
     }
 
     let response: Response
@@ -962,6 +972,25 @@ function isRoutePlan(value: readonly string[] | CpaRoutePlan): value is CpaRoute
 function isFallbackError(cause: unknown): boolean {
   if (!isJsonRecord(cause) || !isString(cause.code)) return false
   return FALLBACK_ERROR_CODES.has(cause.code)
+}
+
+const LEGAL_API_KEY = /^[\x21-\x7E]+$/
+
+export function assertUsableApiKey(raw: string, pkg: string, ref: string): string {
+  const value = raw.trim()
+  if (value.length === 0) {
+    throw new LlmError(
+      `${pkg}: the API key resolved from ${ref} is blank; set ${ref} to the raw key`,
+      INVALID_CREDENTIAL_CODE,
+    )
+  }
+  if (!LEGAL_API_KEY.test(value)) {
+    throw new LlmError(
+      `${pkg}: the API key resolved from ${ref} contains characters no HTTP header can carry; set ${ref} to the raw key alone`,
+      INVALID_CREDENTIAL_CODE,
+    )
+  }
+  return value
 }
 
 export function resolveApiKey(

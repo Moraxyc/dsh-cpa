@@ -16,16 +16,20 @@ import type {
 } from '@deepseek-ai/dsh-llm'
 
 import {
+  assertUsableApiKey,
   CpaAdapter,
   cpaImageTarget,
   parseCpaTraceId,
+  resolveApiKey,
   serializeMessages,
 } from '../../lib/core/adapter.js'
 import type {
+  ApiKeyContext,
   CpaAdapterOptions,
   CpaExecutionEvent,
   CpaRequestImage,
   CpaRequestImages,
+  CredentialsService,
   WireContentPart,
   WireMessage,
   WireRequest,
@@ -484,6 +488,70 @@ describe('core/adapter', () => {
         /stream ended without \[DONE\]/,
       )
       assert.equal(calls, 1)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('assertUsableApiKey and resolveApiKey trim whitespace and reject invalid keys without echoing secrets', async () => {
+    assert.equal(assertUsableApiKey('  sk-cpa-key\t\n', 'dsh-cpa', 'CPA_API_KEY'), 'sk-cpa-key')
+    assert.throws(
+      () => assertUsableApiKey('   ', 'dsh-cpa', 'CPA_API_KEY'),
+      { code: 'INVALID_CREDENTIAL', message: /CPA_API_KEY/ },
+    )
+    assert.throws(
+      () => assertUsableApiKey('sk-\u{1F600}secret', 'dsh-cpa', 'CPA_API_KEY'),
+      (error: Error & { code?: string }) => error.code === 'INVALID_CREDENTIAL'
+        && error.message.includes('CPA_API_KEY')
+        && !error.message.includes('secret'),
+    )
+
+    const credentials: CredentialsService = {
+      resolve: async () => ({ value: '  sk-from-store  ' }),
+    }
+    const ctx: ApiKeyContext = {
+      get<T>(key: string): T | undefined {
+        if (key !== 'credentials') return undefined
+        // SAFETY: the stub returns the CredentialsService implementation for the 'credentials' key.
+        return credentials as T
+      },
+    }
+    const resolve = resolveApiKey(ctx, 'CPA_API_KEY', '')
+    assert.equal(await resolve(), 'sk-from-store')
+  })
+
+  it('sends x-session-id, reads openai-request-id fallback, and parses string error payloads', async () => {
+    const seenHeaders: Array<string | string[] | undefined> = []
+    let calls = 0
+    const server = await startServer((req, res) => {
+      seenHeaders.push(req.headers['x-session-id'])
+      calls += 1
+      if (calls === 1) {
+        sendJson(res, 401, { error: 'invalid api key' }, { 'openai-request-id': 'req_openai_1' })
+        return
+      }
+      res.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'openai-request-id': 'req_openai_2',
+      })
+      res.end(sseBody(
+        ': keep-alive',
+        'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}',
+        'data: [DONE]',
+      ))
+    })
+    try {
+      const adapter = makeAdapter({ baseURL: server.baseURL })
+      await assert.rejects(
+        collect(adapter.stream(userText('hi'))),
+        (error: Error & { code?: string; failure?: { requestId?: string } }) =>
+          error.code === 'AUTH'
+          && error.message === 'invalid api key'
+          && String(error.failure?.requestId) === 'req_openai_1',
+      )
+      const events = await collect(adapter.stream(userText('hi')))
+      assert.equal(events.some(event => event.type === 'text-delta' && event.text === 'ok'), true)
+      assert.deepEqual(seenHeaders, ['session-1', 'session-1'])
     } finally {
       await server.close()
     }
