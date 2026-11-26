@@ -125,6 +125,7 @@ export function cpaImageTarget(image: Pick<ImageRef, 'width' | 'height'>): CpaIm
 
 export interface CpaAdapterOptions {
   baseURL: string
+  resolveBaseURL?: () => string
   provider: string
   defaultContextWindow: number
   defaultMaxTokens: number
@@ -827,7 +828,8 @@ export class CpaAdapter extends LlmAdapter {
     images?: CpaRequestImages,
   ): AsyncGenerator<StreamChunk> {
     const apiKey = await this.options.resolveApiKey()
-    const url = chatCompletionsUrl(this.options.baseURL)
+    const baseURL = this.options.resolveBaseURL?.() ?? this.options.baseURL
+    const url = chatCompletionsUrl(baseURL)
     const body = serializeRequest(options, images)
     const payload = JSON.stringify(body)
     const headers = new Headers(attributionHeaders())

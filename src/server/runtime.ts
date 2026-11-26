@@ -122,6 +122,21 @@ function internalBaseURL(options: CpaOptions, port = options.port): string {
   return `http://${options.host}:${port}/v1`
 }
 
+export function requiresRuntimeRestart(current: CpaSettings, next: CpaSettings): boolean {
+  if (current.mode !== next.mode) return true
+  if (next.mode === 'internal') {
+    return current.internalBin !== next.internalBin
+      || current.port !== next.port
+      || current.configPath !== next.configPath
+      || current.usageStatisticsEnabled !== next.usageStatisticsEnabled
+  }
+  if (next.mode === 'external') {
+    return current.externalUrl !== next.externalUrl
+      || current.externalApiKey !== next.externalApiKey
+  }
+  return false
+}
+
 function errorMessage(cause: unknown): string {
   return isError(cause) ? cause.message : String(cause)
 }
@@ -168,6 +183,7 @@ export class CpaController {
   private models: CpaModel[] = []
   private active = false
   private activeMode: CpaMode | undefined
+  private activeBaseURL = ''
   private managementKey: string | undefined
   private lastError = ''
   private timer: ReturnType<typeof setTimeout> | undefined
@@ -188,6 +204,7 @@ export class CpaController {
     this.settings = settings
     this.adapter = new CpaAdapter({
       baseURL: '',
+      resolveBaseURL: () => this.currentBaseURL(),
       provider: options.provider,
       defaultContextWindow: options.defaultContextWindow,
       defaultMaxTokens: options.defaultMaxTokens,
@@ -213,14 +230,15 @@ export class CpaController {
     this.dataService = new CpaDataService({
       baseURL: () => this.currentBaseURL(),
       managementKey: () => this.managementKey ?? '',
-      dataTtlMs: () => 30_000,
-      modelTtlMs: () => 60_000,
-      concurrency: () => 4,
+      dataTtlMs: () => this.settings.authFilesTtlMs,
+      modelTtlMs: () => this.settings.quotaTtlMs,
+      concurrency: () => this.settings.quotaConcurrency,
     })
   }
 
   currentBaseURL(): string {
-    return this.activeMode === 'external'
+    if (this.activeBaseURL !== '') return this.activeBaseURL
+    return this.settings.mode === 'external'
       ? this.settings.externalUrl
       : internalBaseURL(this.options, this.settings.port)
   }
@@ -377,10 +395,18 @@ export class CpaController {
   update(patch: JsonRecord, persistLegacy = true): Promise<CpaControllerState> {
     return this.enqueue(async () => {
       const next = mergeCpaSettings(this.settings, patch)
-      if (cpaSettingsEqual(next, this.settings) && this.active) return this.getState()
+      if (cpaSettingsEqual(next, this.settings) && (this.active || next.mode === 'off')) {
+        return this.getState()
+      }
+      const restartNeeded = !this.active || requiresRuntimeRestart(this.settings, next)
+      const refreshChanged = next.refreshIntervalMs !== this.settings.refreshIntervalMs
       try {
-        if (this.active && next.mode === this.settings.mode) await this.stopRuntime()
-        await this.applySettings(next)
+        if (restartNeeded) {
+          if (this.active && next.mode === this.settings.mode) await this.stopRuntime()
+          await this.applySettings(next)
+        } else if (next.mode === 'external') {
+          this.managementKey = next.externalManagementKey
+        }
         this.settings = next
         this.lastError = ''
         if (persistLegacy) {
@@ -401,7 +427,7 @@ export class CpaController {
           await nextStore.ensureLoaded()
           this.executionStore = nextStore
         }
-        this.startTimer()
+        if (restartNeeded || refreshChanged) this.startTimer()
       } catch (error) {
         this.lastError = errorMessage(error)
         throw error
@@ -514,6 +540,7 @@ export class CpaController {
     this.models = []
     this.active = false
     this.activeMode = undefined
+    this.activeBaseURL = ''
     this.managementKey = undefined
     this.setApiKey('')
   }
@@ -630,6 +657,7 @@ export class CpaController {
         this.handle = undefined
         this.active = false
         this.activeMode = undefined
+        this.activeBaseURL = ''
         this.managementKey = undefined
         this.stopTimer()
         this.resetModelSync()
@@ -641,12 +669,13 @@ export class CpaController {
         this.setApiKey('')
         this.lastError = 'CPA exited'
       })
-      this.adapter.options.baseURL = baseURL
+      this.activeBaseURL = baseURL
       this.setApiKey(apiKey)
       this.ensureRegistration()
     } catch (error) {
       await stopChild(handle)
       if (this.handle === handle) this.handle = undefined
+      this.activeBaseURL = ''
       this.setApiKey('')
       throw error
     }
@@ -684,7 +713,7 @@ export class CpaController {
 
     const oldHandle = this.handle
     this.ensureRegistration()
-    this.adapter.options.baseURL = baseURL
+    this.activeBaseURL = baseURL
     this.setApiKey(apiKey)
     await this.syncModels(baseURL, apiKey)
 

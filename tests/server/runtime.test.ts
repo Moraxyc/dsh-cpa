@@ -11,6 +11,7 @@ import { EXECUTION_RECORD_TYPE } from '../../lib/core/services.js'
 import {
   CpaController,
   modelSyncRetryDelay,
+  requiresRuntimeRestart,
 } from '../../lib/server/runtime.js'
 import type { CpaRuntimeContext } from '../../lib/server/runtime.js'
 import { sessionId } from '../helpers/fixtures.ts'
@@ -165,5 +166,49 @@ describe('server/runtime', () => {
     const data = isJsonRecord(record?.data) ? record.data : undefined
     assert.equal(data?.model, 'gpt-5')
     assert.equal(data?.outcome, 'success')
+  })
+
+  it('update applies policy and cache settings without restarting the active runtime', async () => {
+    let modelRequests = 0
+    const server = await startServer((_req, res) => {
+      modelRequests += 1
+      sendJson(res, 200, { models: [{ id: 'gpt-5' }] })
+    })
+    const initial = externalSettings(server.baseURL)
+    const controller = new CpaController({
+      get: () => undefined,
+      logger: { warn: () => {} },
+      llm: { registerAdapter: () => () => {} },
+      effect: () => {},
+    }, resolveOptions({}), initial)
+
+    try {
+      await controller.applySettings(initial)
+      const callsAfterStart = modelRequests
+      assert.equal(requiresRuntimeRestart(initial, { ...initial, routingStrategy: 'quota' }), false)
+      assert.equal(requiresRuntimeRestart(initial, { ...initial, externalManagementKey: 'mgmt-new' }), false)
+      assert.equal(requiresRuntimeRestart(initial, { ...initial, externalApiKey: 'sk-rotated' }), true)
+      assert.equal(requiresRuntimeRestart({ ...initial, mode: 'internal' }, { ...initial, mode: 'internal', port: 9001 }), true)
+      assert.equal(requiresRuntimeRestart({ ...initial, mode: 'internal' }, { ...initial, mode: 'internal', dailyRequestLimit: 50 }), false)
+
+      const updated = await controller.update({
+        routingStrategy: 'quota',
+        dailyRequestLimit: 42,
+        authFilesTtlMs: 12_000,
+        quotaTtlMs: 24_000,
+        quotaConcurrency: 2,
+        externalManagementKey: 'mgmt-hot',
+      }, false)
+
+      assert.equal(modelRequests, callsAfterStart)
+      assert.equal(updated.active, true)
+      assert.equal(updated.routingStrategy, 'quota')
+      assert.equal(updated.dailyRequestLimit, 42)
+      assert.equal(updated.managementAvailable, true)
+      assert.deepEqual((await controller.diagnostics()).models.map(m => m.id), ['gpt-5'])
+    } finally {
+      await controller.stopRuntime()
+      await server.close()
+    }
   })
 })
