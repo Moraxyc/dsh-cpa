@@ -1,5 +1,13 @@
 import { isArray, asJsonRecord, isError, isJsonRecord, isNonEmptyString, isString } from '../core/json.js'
 import type { JsonRecord, JsonValue } from '../core/json.js'
+import type {
+  CpaConfig,
+  CpaSummary,
+  CpaSummaryError,
+  CpaUsage,
+  UsageModel,
+  UsageTotals,
+} from '../core/wire.js'
 import {
   CPA_CONFIG_PATH,
   CPA_CREDENTIAL_MODELS_PATH,
@@ -16,78 +24,20 @@ import {
 } from './quota.js'
 import type { CpaAccountPublic, OptionSource } from './quota.js'
 
+export type {
+  CpaAccountSummary,
+  CpaConfig,
+  CpaSummary,
+  CpaSummaryError,
+  CpaUsage,
+  UsageModel,
+  UsageTotals,
+} from '../core/wire.js'
+
 const DEFAULT_DATA_TTL_MS = 30_000
 const DEFAULT_MODEL_TTL_MS = 60_000
 const DEFAULT_MODEL_CONCURRENCY = 4
 const MAX_MODELS = 200
-
-export interface UsageTotals {
-  totalRequests: number
-  successRequests: number
-  failedRequests: number
-  totalPromptTokens: number
-  totalCompletionTokens: number
-  totalTokens: number
-  successRate: number
-}
-
-export interface UsageModel {
-  modelId: string
-  totalRequests: number
-  successRequests: number
-  failedRequests: number
-  totalPromptTokens: number
-  totalCompletionTokens: number
-  totalTokens: number
-  successRate: number
-  firstRequestAt: string
-  lastRequestAt: string
-}
-
-export interface CpaUsage {
-  fetchedAt: string
-  totals: UsageTotals
-  models: UsageModel[]
-}
-
-export interface CpaConfig {
-  routingStrategy: string
-  proxyUrl: string
-  requestRetry: number
-  maxRetryInterval: number
-  debug: boolean
-  requestLog: boolean
-  loggingToFile: boolean
-  usageStatisticsEnabled: boolean
-  websocketAuth: boolean
-  forceModelPrefix: boolean
-  logsMaxTotalSizeMb: number
-  errorLogsMaxFiles: number
-}
-
-export interface CpaSummaryError {
-  source: string
-  message: string
-}
-
-export interface CpaAccountSummary extends CpaAccountPublic {
-  models: string[]
-}
-
-export interface CpaSummary {
-  available: boolean
-  fetchedAt: string
-  instance: {
-    version: string
-    latestVersion: string
-    updateAvailable: boolean
-    config: CpaConfig
-  }
-  usage: CpaUsage
-  accounts: CpaAccountSummary[]
-  models: string[]
-  errors: CpaSummaryError[]
-}
 
 export interface CpaDataServiceOptions {
   baseURL: OptionSource<string>

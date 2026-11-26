@@ -1,20 +1,8 @@
 import { isJsonRecord, isNonEmptyString, isNumber, isString } from './json.js'
 import type { JsonRecord, JsonValue } from './json.js'
+import type { CpaQuotaObservation, CpaQuotaWindowObservation } from './wire.js'
 
-export type CpaQuotaWindowObservation = {
-  id: string
-  label: string
-  remainingPercent: number
-  /** Epoch milliseconds. */
-  resetAt?: number
-}
-
-/** Quota for the account that served one inference response. */
-export type CpaQuotaObservation = {
-  provider: string
-  windows: CpaQuotaWindowObservation[]
-  observedAt: number
-}
+export type { CpaQuotaObservation, CpaQuotaWindowObservation } from './wire.js'
 
 export type QuotaSignalWindow = CpaQuotaWindowObservation & {
   exhausted: boolean

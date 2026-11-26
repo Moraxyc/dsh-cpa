@@ -5,6 +5,19 @@ import type { Volatile } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { isBoolean, isJsonRecord, isNonEmptyString, isNumber, isString } from './json.js'
 import type { JsonRecord, JsonValue } from './json.js'
+import type {
+  CpaMode,
+  CpaRoutingStrategy,
+} from './wire.js'
+
+export type {
+  CpaInputModality,
+  CpaMode,
+  CpaModel,
+  CpaReasoning,
+  CpaReasoningEffort,
+  CpaRoutingStrategy,
+} from './wire.js'
 
 export const DEFAULT_HOST = '127.0.0.1'
 export const DEFAULT_PORT = 8317
@@ -19,8 +32,6 @@ export const DEFAULT_QUOTA_CONCURRENCY = 4
 export const DEFAULT_ROUTING_STRATEGY = 'balanced'
 export const DEFAULT_DAILY_REQUEST_LIMIT = 0
 
-export type CpaMode = 'internal' | 'external' | 'off'
-export type CpaRoutingStrategy = 'balanced' | 'quality' | 'availability' | 'quota'
 export type ConfigScalar = string | number | boolean | null | undefined
 
 export interface CpaSettings {
@@ -162,28 +173,6 @@ export interface CpaOptionsInput {
   defaultContextWindow?: ConfigScalar
   defaultMaxTokens?: ConfigScalar
 }
-
-export interface CpaReasoningEffort {
-  id: string
-  name: string
-  description?: string
-}
-
-export interface CpaReasoning {
-  efforts: CpaReasoningEffort[]
-  defaultEffort?: string
-}
-
-export interface CpaModel {
-  id: string
-  displayName?: string
-  contextLength?: number
-  maxCompletionTokens?: number
-  reasoning?: CpaReasoning
-  inputModalities?: CpaInputModality[]
-}
-
-export type CpaInputModality = 'text' | 'image'
 
 export function dshHome(): string {
   return process.env.DSH_HOME || join(homedir(), '.dsh')

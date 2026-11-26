@@ -4,7 +4,9 @@ import type { ConfigScalar } from './config.js'
 import { isJsonRecord, isNonEmptyString, isNumber, isString } from './json.js'
 import type { JsonValue } from './json.js'
 import { sanitizeQuotaObservation } from './quota-headers.js'
-import type { CpaQuotaObservation } from './quota-headers.js'
+import type { ExecutionRecord, LocalUsageModel, LocalUsageSummary } from './wire.js'
+
+export type { ExecutionRecord, LocalUsageModel, LocalUsageSummary } from './wire.js'
 
 export interface ExecutionInput {
   authIndex?: ConfigScalar
@@ -27,29 +29,6 @@ export interface ExecutionInput {
   fallbackReason?: ConfigScalar
   errorCode?: ConfigScalar
   quota?: JsonValue
-}
-
-export interface ExecutionRecord {
-  authIndex?: string
-  sessionId?: string
-  provider: string
-  model: string
-  purpose: string
-  outcome: string
-  traceId: string
-  requestId: string
-  time: number
-  inputTokens?: number
-  outputTokens?: number
-  requestedModel?: string
-  attempt?: number
-  route?: string[]
-  preflightStatus?: 'ready' | 'warning' | 'blocked'
-  preflightIssues?: string[]
-  fallbackFrom?: string
-  fallbackReason?: string
-  errorCode?: string
-  quota?: CpaQuotaObservation
 }
 
 /** dsh restores unknown event types only when they are ignorable. */
@@ -81,32 +60,6 @@ export interface CpaSessionStats {
 
 export interface CpaUsageProjection extends CpaSessionStats {
   latest: ExecutionRecord
-}
-
-export interface LocalUsageModel {
-  modelId: string
-  totalRequests: number
-  successRequests: number
-  failedRequests: number
-  inputTokens: number
-  outputTokens: number
-  totalTokens: number
-}
-
-export interface LocalUsageSummary {
-  since: string
-  fetchedAt: string
-  retainedRecords: number
-  totals: {
-    totalRequests: number
-    successRequests: number
-    failedRequests: number
-    inputTokens: number
-    outputTokens: number
-    totalTokens: number
-    successRate: number
-  }
-  models: LocalUsageModel[]
 }
 
 export interface ProjectionSchema<T> {

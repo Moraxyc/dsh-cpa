@@ -1,32 +1,29 @@
+import {
+  DIAGNOSTICS_PATH,
+  EXECUTION_STATUS_PATH,
+  PANEL_PATH,
+  REPORT_PATH,
+  SETTINGS_PATH,
+  SUMMARY_PATH,
+} from '../core/wire.js'
 import type {
-  CpaAccountPublic,
   CpaControllerState,
   CpaDiagnostics,
-  CpaQuotaReport,
+  CpaExecutionStatusResponse,
   CpaSummary,
-  ExecutionRecord,
 } from './wire.js'
 
-export const SETTINGS_URL = '/dsh-cpa/settings'
-export const SUMMARY_URL = '/dsh-cpa/summary'
-export const DIAGNOSTICS_URL = '/dsh-cpa/diagnostics'
-export const REPORT_URL = '/dsh-cpa/report'
-export const PANEL_URL = '/dsh-cpa/management'
-export const EXECUTION_STATUS_URL = '/dsh-cpa/execution-status'
+export const SETTINGS_URL = SETTINGS_PATH
+export const SUMMARY_URL = SUMMARY_PATH
+export const DIAGNOSTICS_URL = DIAGNOSTICS_PATH
+export const REPORT_URL = REPORT_PATH
+export const PANEL_URL = PANEL_PATH
+export const EXECUTION_STATUS_URL = EXECUTION_STATUS_PATH
 export const READOUT_REFRESH_MS = 60_000
 export const SUMMARY_REFRESH_MS = 60_000
 export const MAX_SUMMARY_MODELS = 8
 
-export interface ExecutionStatusResponse {
-  /** Whether a management key is configured. */
-  available: boolean
-  route?: string
-  accounts: CpaAccountPublic[]
-  quota: Record<string, CpaQuotaReport>
-  execution: ExecutionRecord | null
-  executions: ExecutionRecord[]
-}
-
+export type ExecutionStatusResponse = CpaExecutionStatusResponse
 export type RuntimeStateResponse = CpaControllerState | { available: false }
 
 async function requestJson<T>(url: string, unavailable: string): Promise<T> {

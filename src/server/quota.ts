@@ -1,6 +1,21 @@
 import { asJsonRecord, isArray, isBoolean, isJsonRecord, isNonEmptyString, isNumber, isString } from '../core/json.js'
 import type { JsonRecord, JsonValue } from '../core/json.js'
 import { parseQuotaSignalWindows, signalMapFromRecord } from '../core/quota-headers.js'
+import type {
+  CpaAccountPublic,
+  CpaQuotaReport,
+  QuotaRisk,
+  QuotaStatus,
+  QuotaWindow,
+} from '../core/wire.js'
+
+export type {
+  CpaAccountPublic,
+  CpaQuotaReport,
+  QuotaRisk,
+  QuotaStatus,
+  QuotaWindow,
+} from '../core/wire.js'
 
 const CODE_5H = 5 * 60 * 60
 const CODE_7D = 7 * 24 * 60 * 60
@@ -34,75 +49,17 @@ export function resolvedOption<T>(value: OptionSource<T>): T {
   return isResolver(value) ? value() : value
 }
 
-export interface QuotaWindow {
-  id: string
-  label: string
-  remainingPercent: number | null
-  resetLabel: string
-  exhausted: boolean
-  risk: QuotaRisk
-}
-
-export type QuotaStatus = 'unknown' | 'exhausted' | 'low' | 'medium' | 'high' | 'full'
-export type QuotaRisk = 'unknown' | 'critical' | 'warning' | 'normal'
-
 interface QuotaGroupState {
   remainingPercent: number | null
   resetLabel: string
   exhausted: boolean
 }
 
-export interface CpaQuotaReport {
-  provider: string
-  authIndex: string
-  label: string
-  planType: string
-  status: QuotaStatus
-  risk: QuotaRisk
-  windows: QuotaWindow[]
-  refreshedAt?: string
-}
-
-export interface CpaAccount {
-  authIndex: string
-  label: string
-  name?: string
-  provider: string
-  status: string
-  source: string
-  statusMessage?: string
-  disabled: boolean
-  unavailable: boolean
-  success: number
-  failed: number
-  recentRequests: number
+export interface CpaAccount extends CpaAccountPublic {
   accountId: string
-  planType: string
   projectId: string
-  priority?: number
-  note?: string
-  lastRefresh?: string
-  nextRetryAfter?: string
-  websockets?: boolean
-  runtimeOnly?: boolean
-  quotaAutoDisabled?: boolean
-  weight?: number
-  requestRetry?: number
-  requiresSignIn?: boolean
-  renewalState?: string
-  recoveryStage?: string
-  quotaBlocked?: boolean
-  quotaPluginId?: string
-  siwcStatus?: string
-  useSiwc?: boolean
   passiveQuota?: CpaQuotaReport
-  baseUrl?: string
-  prefix?: string
-  modelAliases?: string[]
-  disableCooling?: boolean
 }
-
-export type CpaAccountPublic = Omit<CpaAccount, 'accountId' | 'projectId' | 'passiveQuota'>
 
 export interface PayloadSource {
   [key: string]: JsonValue | undefined
