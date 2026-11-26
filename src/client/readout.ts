@@ -309,6 +309,18 @@ export function accountDetailRows(
   if (account.priority !== undefined) {
     rows.push({ label: '优先级', value: String(account.priority) })
   }
+  if (account.weight !== undefined) {
+    rows.push({ label: '权重', value: String(account.weight) })
+  }
+  if (account.siwcStatus !== undefined && account.siwcStatus !== '' && account.siwcStatus !== 'off') {
+    rows.push({
+      label: 'SIWC',
+      value: account.siwcStatus === 'valid'
+        ? (account.useSiwc === true ? '有效（启用中）' : '有效')
+        : '无效',
+      tone: account.siwcStatus === 'invalid' ? 'warn' : '',
+    })
+  }
   if (account.statusMessage !== undefined && account.statusMessage !== '') {
     rows.push({ label: '状态消息', value: account.statusMessage, wide: true })
   }

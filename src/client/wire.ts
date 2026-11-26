@@ -44,6 +44,15 @@ export interface CpaAccountPublic {
   websockets?: boolean
   runtimeOnly?: boolean
   quotaAutoDisabled?: boolean
+  weight?: number
+  requestRetry?: number
+  requiresSignIn?: boolean
+  renewalState?: string
+  recoveryStage?: string
+  quotaBlocked?: boolean
+  quotaPluginId?: string
+  siwcStatus?: string
+  useSiwc?: boolean
   baseUrl?: string
   prefix?: string
   modelAliases?: string[]

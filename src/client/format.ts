@@ -115,7 +115,9 @@ export function sourceLabel(account: AccountView | undefined): string {
 
 export function accountStatus(account: AccountView | undefined): string {
   if (account === undefined) return ''
+  if (account.requiresSignIn === true) return '需重新登录'
   if (account.quotaAutoDisabled === true) return '停用'
+  if (account.quotaBlocked === true) return '额度受限'
   if (account.disabled === true) return '停用'
   if (account.unavailable === true) return '不可用'
   const status = account.status?.trim().toLowerCase() ?? ''
