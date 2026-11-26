@@ -1,5 +1,6 @@
 import { asJsonRecord, isArray, isBoolean, isJsonRecord, isNonEmptyString, isNumber, isString } from '../core/json.js'
 import type { JsonRecord, JsonValue } from '../core/json.js'
+import { parseQuotaSignalWindows, signalMapFromRecord } from '../core/quota-headers.js'
 
 const CODE_5H = 5 * 60 * 60
 const CODE_7D = 7 * 24 * 60 * 60
@@ -371,21 +372,6 @@ export function normalizeAntigravityWindows(payload: QuotaApiPayload | null | un
   return windows
 }
 
-function signalValue(signals: JsonRecord, target: string): JsonValue | undefined {
-  for (const [key, value] of Object.entries(signals)) {
-    if (key.toLowerCase() === target) return value
-  }
-  return undefined
-}
-
-function signalDurationLabel(minutes: number | null): string {
-  if (minutes === null || minutes <= 0) return '额度'
-  const seconds = minutes * 60
-  if (seconds % 86_400 === 0) return `${seconds / 86_400}d`
-  if (seconds % 3_600 === 0) return `${seconds / 3_600}h`
-  return `${minutes}m`
-}
-
 export function normalizePassiveSignalWindows(
   provider: string,
   signals: JsonRecord | null | undefined,
@@ -393,50 +379,15 @@ export function normalizePassiveSignalWindows(
 ): QuotaWindow[] {
   if (!isJsonRecord(signals)) return []
   const normalizedProvider = provider.trim().toLowerCase()
-  const windows: QuotaWindow[] = []
-  if (normalizedProvider === 'claude') {
-    for (const label of ['5h', '7d'] as const) {
-      const utilization = compactNumber(signalValue(signals, `anthropic-ratelimit-unified-${label}-utilization`), null)
-      if (utilization === null || utilization < 0) continue
-      const remainingPercent = clampPercent(100 - utilization * 100)
-      const reset = formatResetLabel(resetTimestampSeconds(signalValue(signals, `anthropic-ratelimit-unified-${label}-reset`)))
-      const exhausted = remainingPercent <= 0
-      windows.push({
-        id: `claude-${label}`,
-        label,
-        remainingPercent,
-        resetLabel: reset,
-        exhausted,
-        risk: deriveQuotaRisk(remainingPercent, exhausted),
-      })
-    }
-    return windows
-  }
-  if (normalizedProvider === 'codex') {
-    const limitReached = String(signalValue(signals, 'x-codex-limit-reached') ?? '').toLowerCase() === 'true'
-      || String(signalValue(signals, 'x-codex-allowed') ?? '').toLowerCase() === 'false'
-    for (const name of ['primary', 'secondary'] as const) {
-      const prefix = `x-codex-${name}-`
-      const used = compactNumber(signalValue(signals, `${prefix}used-percent`), null)
-      if (used === null || used < 0) continue
-      const minutes = compactNumber(signalValue(signals, `${prefix}window-minutes`), null)
-      const resetAt = resetTimestampSeconds(signalValue(signals, `${prefix}reset-at`))
-      const resetAfter = compactNumber(signalValue(signals, `${prefix}reset-after-seconds`), 0) ?? 0
-      const reset = resetAt > 0 ? resetAt : resetAfter > 0 ? now.getTime() / 1000 + resetAfter : 0
-      const id = minutes === 300 ? 'code-5h' : minutes === 10_080 ? 'code-7d' : `code-${minutes ?? name}`
-      const remainingPercent = clampPercent(100 - used)
-      const exhausted = remainingPercent <= 0 || (limitReached && reset > 0)
-      windows.push({
-        id,
-        label: signalDurationLabel(minutes),
-        remainingPercent,
-        resetLabel: formatResetLabel(reset),
-        exhausted,
-        risk: deriveQuotaRisk(remainingPercent, exhausted),
-      })
-    }
-  }
-  return windows
+  if (normalizedProvider !== 'claude' && normalizedProvider !== 'codex') return []
+  return parseQuotaSignalWindows(normalizedProvider, signalMapFromRecord(signals), now.getTime()).map(window => ({
+    id: window.id,
+    label: window.label,
+    remainingPercent: window.remainingPercent,
+    resetLabel: window.resetAt !== undefined ? formatResetLabel(window.resetAt / 1000) : '',
+    exhausted: window.exhausted,
+    risk: deriveQuotaRisk(window.remainingPercent, window.exhausted),
+  }))
 }
 
 export function normalizePluginQuotaWindows(payload: JsonValue | null | undefined): QuotaWindow[] {
@@ -682,7 +633,9 @@ export function sanitizeAuthFile(entry: JsonValue | null | undefined): CpaAccoun
   if (siwcStatus !== '') account.siwcStatus = siwcStatus
   if (entry.use_siwc === true || entry.useSiwc === true) account.useSiwc = true
   if (passiveWindows.length > 0) {
-    const signalPlan = passiveSignals === null ? '' : stringOrEmpty(signalValue(passiveSignals, 'x-codex-plan-type'))
+    const signalPlan = passiveSignals === null
+      ? ''
+      : stringOrEmpty(signalMapFromRecord(passiveSignals).get('x-codex-plan-type'))
     account.passiveQuota = {
       provider,
       authIndex,

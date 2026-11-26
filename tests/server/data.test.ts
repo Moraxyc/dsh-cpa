@@ -226,4 +226,45 @@ describe('server/data', () => {
       await server.close()
     }
   })
+
+  it('reuses injected getAccounts provider instead of querying auth-files separately', async () => {
+    const requestedPaths: string[] = []
+    const server = await startServer((req, res) => {
+      req.resume()
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      requestedPaths.push(url.pathname)
+      sendJson(res, 200, {})
+    })
+    let calls = 0
+    try {
+      const service = new CpaDataService({
+        baseURL: server.baseURL,
+        managementKey: MANAGEMENT_KEY,
+        getAccounts: async () => {
+          calls += 1
+          return [{
+            authIndex: 'shared-auth',
+            label: 'Shared Codex',
+            provider: 'codex',
+            source: 'auth-file',
+            status: 'active',
+            disabled: false,
+            unavailable: false,
+            success: 2,
+            failed: 0,
+            recentRequests: 2,
+            planType: 'pro',
+          }]
+        },
+      })
+      const summary = await service.summary()
+      assert.equal(calls, 1)
+      assert.equal(summary.accounts.length, 1)
+      assert.equal(summary.accounts[0]?.authIndex, 'shared-auth')
+      assert.equal(requestedPaths.includes('/v8/management/auth-files'), false)
+      assert.equal(requestedPaths.includes('/v8/management/api-keys'), false)
+    } finally {
+      await server.close()
+    }
+  })
 })

@@ -95,6 +95,7 @@ export interface CpaDataServiceOptions {
   dataTtlMs?: OptionSource<number>
   modelTtlMs?: OptionSource<number>
   concurrency?: OptionSource<number>
+  getAccounts?: (now: number) => Promise<CpaAccountPublic[]>
 }
 
 interface CacheResult<T> {
@@ -547,7 +548,10 @@ export class CpaDataService {
     return normalizeVersion(body)
   }
 
-  async loadAccounts(): Promise<AccountsValue> {
+  async loadAccounts(now: number): Promise<AccountsValue> {
+    if (this.options.getAccounts !== undefined) {
+      return { accounts: await this.options.getAccounts(now), errors: [] }
+    }
     const baseURL = resolvedOption(this.options.baseURL)
     const managementKey = resolvedOption(this.options.managementKey)
     const [filesResult, providersResult] = await Promise.allSettled([
@@ -579,7 +583,16 @@ export class CpaDataService {
       this.cached(this.usageCache, 'dataTtlMs', now, () => this.loadUsage(new Date(now))),
       this.cached(this.configCache, 'dataTtlMs', now, () => this.loadConfig(new Date(now))),
       this.cached(this.versionCache, 'dataTtlMs', now, () => this.loadLatestVersion()),
-      this.cached(this.accountsCache, 'dataTtlMs', now, () => this.loadAccounts()),
+      this.options.getAccounts !== undefined
+        ? this.loadAccounts(now).then(
+            value => {
+              this.accountsCache.fetchedAt = now
+              this.accountsCache.value = value
+              return { value, error: undefined }
+            },
+            error => ({ value: this.accountsCache.value, error }),
+          )
+        : this.cached(this.accountsCache, 'dataTtlMs', now, () => this.loadAccounts(now)),
     ])
     return { usageResult, configResult, versionResult, accountsResult }
   }

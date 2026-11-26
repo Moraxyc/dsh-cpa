@@ -53,7 +53,7 @@ import type {
   CpaReport,
   ManagementWebScope,
 } from './management.js'
-import { CpaQuotaService } from './quota.js'
+import { CpaQuotaService, publicAccount } from './quota.js'
 import type { CpaAccountPublic } from './quota.js'
 import { planCpaRoute } from '../core/router.js'
 import type { CpaRouteOptions, CpaRoutePlan } from '../core/router.js'
@@ -233,6 +233,7 @@ export class CpaController {
       dataTtlMs: () => this.settings.authFilesTtlMs,
       modelTtlMs: () => this.settings.quotaTtlMs,
       concurrency: () => this.settings.quotaConcurrency,
+      getAccounts: async now => (await this.quotaService.ensureAccounts(now)).map(publicAccount),
     })
   }
 
