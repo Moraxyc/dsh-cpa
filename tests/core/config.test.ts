@@ -117,8 +117,10 @@ describe('core/config', () => {
   it('normalizeModels reads catalog input modalities', () => {
     assert.deepEqual(normalizeModels([
       { slug: 'vision', input_modalities: ['text', 'image', 'IMAGE', 'audio'] },
+      { slug: 'compat-vision', supported_input_modalities: ['TEXT', 'IMAGE'] },
       { slug: 'empty', input_modalities: ['audio'] },
     ]), [
+      { id: 'compat-vision', inputModalities: ['text', 'image'] },
       { id: 'empty' },
       { id: 'vision', inputModalities: ['text', 'image'] },
     ])

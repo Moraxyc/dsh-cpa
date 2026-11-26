@@ -417,7 +417,9 @@ export function normalizeModels(data: readonly JsonValue[]): CpaModel[] {
     if (maxCompletionTokens !== undefined) model.maxCompletionTokens = maxCompletionTokens
     const reasoning = normalizeReasoning(entry)
     if (reasoning !== undefined) model.reasoning = reasoning
-    const inputModalities = normalizeInputModalities(entry.input_modalities)
+    const inputModalities = normalizeInputModalities(
+      entry.input_modalities ?? entry.supported_input_modalities ?? entry.supportedInputModalities,
+    )
     if (inputModalities !== undefined) model.inputModalities = inputModalities
     models.push(model)
   }

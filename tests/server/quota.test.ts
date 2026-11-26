@@ -2,11 +2,16 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  CPA_CREDENTIALS_PATH,
+  CPA_PLUGINS_PATH,
   CpaQuotaService,
   deriveQuotaRisk,
   normalizeAntigravityWindows,
   normalizeGeminiWindows,
+  normalizePassiveSignalWindows,
+  normalizePluginQuotaReport,
   normalizeQuotaReport,
+  publicAccount,
   sanitizeAuthFiles,
 } from '../../lib/server/quota.js'
 import { makeIdToken } from '../helpers/fixtures.ts'
@@ -392,6 +397,118 @@ describe('server/quota', () => {
       const status = await service.status()
       assert.deepEqual(status.accounts.map(account => account.authIndex), ['auth-cached'])
       assert.deepEqual(status.quota, {})
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('supports CPA v8.1.6 RFC3339 reset times, passive quota signals, recovery fields, and plugin quota', async () => {
+    const now = new Date('2026-11-26T10:00:00.000Z')
+    const isoGemini = normalizeGeminiWindows({
+      buckets: [{ modelId: 'gemini-2.5-flash', remainingFraction: 0.4, resetTime: '2026-11-26T12:00:00Z' }],
+    })
+    assert.equal(isoGemini[0]?.remainingPercent, 40)
+    assert.notEqual(isoGemini[0]?.resetLabel, '')
+
+    const passiveClaude = normalizePassiveSignalWindows('claude', {
+      'anthropic-ratelimit-unified-5h-utilization': '0.25',
+      'anthropic-ratelimit-unified-5h-reset': '1795694400',
+      'anthropic-ratelimit-unified-7d-utilization': '0.5',
+    }, now)
+    assert.deepEqual(
+      passiveClaude.map(window => [window.id, window.remainingPercent]),
+      [['claude-5h', 75], ['claude-7d', 50]],
+    )
+
+    const pluginReport = normalizePluginQuotaReport('kiro', 'Kiro Account', 'plugin-auth-1', '', {
+      subscription: { plan: 'Pro' },
+      groups: [{
+        displayName: 'Monthly',
+        buckets: [{ window: 'credits', remainingFraction: 0.85, resetTime: '2026-12-01T00:00:00Z' }],
+      }],
+    }, now)
+    assert.equal(pluginReport.planType, 'Pro')
+    assert.equal(pluginReport.status, 'high')
+    assert.equal(pluginReport.windows[0]?.remainingPercent, 85)
+
+    const server = await startServer((req, res) => {
+      req.resume()
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      if (url.pathname === CPA_CREDENTIALS_PATH) {
+        sendJson(res, 200, {
+          files: [
+            {
+              auth_index: 'claude-1',
+              name: 'claude.json',
+              provider: 'claude',
+              weight: 3,
+              request_retry: 2,
+              requires_sign_in: true,
+              renewal_state: 'sign_in_required',
+              recovery_stage: 'sign_in_required',
+              quota_blocked: false,
+              quota: {
+                observed_at: '2026-11-26T10:00:00.000Z',
+                signals: { 'anthropic-ratelimit-unified-5h-utilization': '0.2' },
+              },
+            },
+            {
+              auth_index: 'plugin-1',
+              name: 'plugin.json',
+              provider: 'custom-plugin',
+              supports_quota: true,
+              quota_plugin_id: 'custom-plugin',
+              siwc_status: 'valid',
+              use_siwc: true,
+            },
+          ],
+        })
+        return
+      }
+      if (url.pathname === `${CPA_PLUGINS_PATH}/custom-plugin/quota`) {
+        assert.equal(url.searchParams.get('auth_index'), 'plugin-1')
+        sendJson(res, 200, {
+          subscription: { plan: 'Team' },
+          groups: [{ buckets: [{ window: '5h', remaining_fraction: 0.6 }] }],
+        })
+        return
+      }
+      sendJson(res, 404, { error: 'not_found' })
+    })
+
+    try {
+      const service = new CpaQuotaService({
+        baseURL: server.baseURL,
+        managementKey: MANAGEMENT_KEY,
+        authFilesTtlMs: 60_000,
+        quotaTtlMs: 60_000,
+      })
+      const status = await service.status()
+      const claude = status.accounts.find(account => account.authIndex === 'claude-1')
+      assert.equal(claude?.weight, 3)
+      assert.equal(claude?.requestRetry, 2)
+      assert.equal(claude?.requiresSignIn, true)
+      assert.equal(claude?.renewalState, 'sign_in_required')
+      assert.equal(claude?.recoveryStage, 'sign_in_required')
+      assert.equal('passiveQuota' in (claude ?? {}), false)
+      assert.equal(status.quota['claude-1']?.windows[0]?.remainingPercent, 80)
+
+      const pluginAcc = status.accounts.find(account => account.authIndex === 'plugin-1')
+      assert.equal(pluginAcc?.quotaPluginId, 'custom-plugin')
+      assert.equal(pluginAcc?.siwcStatus, 'valid')
+      assert.equal(pluginAcc?.useSiwc, true)
+      assert.equal(status.quota['plugin-1']?.planType, 'Team')
+      assert.equal(status.quota['plugin-1']?.windows[0]?.remainingPercent, 60)
+
+      const sanitized = sanitizeAuthFiles([{
+        auth_index: 'x',
+        provider: 'claude',
+        quota: { observed_at: '2026-11-26T10:00:00.000Z', signals: { 'anthropic-ratelimit-unified-5h-utilization': '0.1' } },
+      }])
+      const first = sanitized[0]
+      assert.ok(first)
+      const pub = publicAccount(first)
+      assert.equal('passiveQuota' in pub, false)
     } finally {
       await server.close()
     }

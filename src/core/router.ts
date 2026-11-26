@@ -7,6 +7,8 @@ export interface CpaRouteAccount {
   disabled?: boolean
   unavailable?: boolean
   quotaAutoDisabled?: boolean
+  requiresSignIn?: boolean
+  quotaBlocked?: boolean
   priority?: number
   status?: string
   success?: number
@@ -130,6 +132,8 @@ function accountHealth(account: CpaRouteAccount): CpaRouteHealth {
     account.disabled
     || account.unavailable
     || account.quotaAutoDisabled
+    || account.requiresSignIn
+    || account.quotaBlocked
     || status === 'disabled'
     || status === 'inactive'
     || status === 'blocked'

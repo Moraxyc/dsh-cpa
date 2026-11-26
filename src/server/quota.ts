@@ -17,6 +17,7 @@ export const CPA_CREDENTIAL_MODELS_PATH = '/v8/management/credentials/models'
 export const CPA_API_CALL_PATH = '/v8/management/requests/api-call'
 export const CPA_USAGE_API_KEYS_PATH = '/v8/management/observability/usage/api-keys'
 export const CPA_LATEST_VERSION_PATH = '/v8/management/server/latest-version'
+export const CPA_PLUGINS_PATH = '/v8/management/plugins'
 
 export type OptionSource<T> = T | (() => T)
 
@@ -84,13 +85,23 @@ export interface CpaAccount {
   websockets?: boolean
   runtimeOnly?: boolean
   quotaAutoDisabled?: boolean
+  weight?: number
+  requestRetry?: number
+  requiresSignIn?: boolean
+  renewalState?: string
+  recoveryStage?: string
+  quotaBlocked?: boolean
+  quotaPluginId?: string
+  siwcStatus?: string
+  useSiwc?: boolean
+  passiveQuota?: CpaQuotaReport
   baseUrl?: string
   prefix?: string
   modelAliases?: string[]
   disableCooling?: boolean
 }
 
-export type CpaAccountPublic = Omit<CpaAccount, 'accountId' | 'projectId'>
+export type CpaAccountPublic = Omit<CpaAccount, 'accountId' | 'projectId' | 'passiveQuota'>
 
 export interface PayloadSource {
   [key: string]: JsonValue | undefined
@@ -238,6 +249,16 @@ export function normalizeCodexWindows(payload: QuotaApiPayload | null | undefine
   return windows
 }
 
+function resetTimestampSeconds(value: JsonValue | undefined): number {
+  const numeric = compactNumber(value, null)
+  if (numeric !== null && numeric > 0) return numeric
+  if (isString(value) && value.trim() !== '') {
+    const parsedMs = Date.parse(value.trim())
+    if (Number.isFinite(parsedMs) && parsedMs > 0) return parsedMs / 1000
+  }
+  return 0
+}
+
 function normalizeCodexWindow(id: string, label: string, window: JsonRecord, exhausted: boolean, now: Date): QuotaWindow {
   const used = compactNumber(firstScalar(window, ['used_percent', 'usedPercent']), null)
   const resetAt = compactNumber(firstScalar(window, ['reset_at', 'resetAt']), 0) ?? 0
@@ -268,7 +289,7 @@ export function normalizeGeminiWindows(payload: QuotaApiPayload | null | undefin
     if (modelId === '') continue
     const remaining = compactNumber(firstScalar(bucket, ['remainingFraction', 'remaining_fraction', 'remaining']), null)
     const remainingPercent = remaining === null ? null : clampPercent(remaining * 100)
-    const reset = formatResetLabel(compactNumber(firstScalar(bucket, ['resetTime', 'reset_time']), 0) ?? 0)
+    const reset = formatResetLabel(resetTimestampSeconds(firstScalar(bucket, ['resetTime', 'reset_time'])))
     const group = geminiGroup(modelId)
     if (group === undefined) {
       extras.push({
@@ -336,7 +357,7 @@ export function normalizeAntigravityWindows(payload: QuotaApiPayload | null | un
         : {}
     const remaining = compactNumber(firstScalar(quota, ['remainingFraction', 'remaining_fraction', 'remaining']), null)
     const remainingPercent = remaining === null ? null : clampPercent(remaining * 100)
-    const reset = formatResetLabel(compactNumber(firstScalar(quota, ['resetTime', 'reset_time']), 0) ?? 0)
+    const reset = formatResetLabel(resetTimestampSeconds(firstScalar(quota, ['resetTime', 'reset_time'])))
     const exhausted = remaining !== null && remaining <= 0
     windows.push({
       id: modelId,
@@ -348,6 +369,128 @@ export function normalizeAntigravityWindows(payload: QuotaApiPayload | null | un
     })
   }
   return windows
+}
+
+function signalValue(signals: JsonRecord, target: string): JsonValue | undefined {
+  for (const [key, value] of Object.entries(signals)) {
+    if (key.toLowerCase() === target) return value
+  }
+  return undefined
+}
+
+function signalDurationLabel(minutes: number | null): string {
+  if (minutes === null || minutes <= 0) return '额度'
+  const seconds = minutes * 60
+  if (seconds % 86_400 === 0) return `${seconds / 86_400}d`
+  if (seconds % 3_600 === 0) return `${seconds / 3_600}h`
+  return `${minutes}m`
+}
+
+export function normalizePassiveSignalWindows(
+  provider: string,
+  signals: JsonRecord | null | undefined,
+  now = new Date(),
+): QuotaWindow[] {
+  if (!isJsonRecord(signals)) return []
+  const normalizedProvider = provider.trim().toLowerCase()
+  const windows: QuotaWindow[] = []
+  if (normalizedProvider === 'claude') {
+    for (const label of ['5h', '7d'] as const) {
+      const utilization = compactNumber(signalValue(signals, `anthropic-ratelimit-unified-${label}-utilization`), null)
+      if (utilization === null || utilization < 0) continue
+      const remainingPercent = clampPercent(100 - utilization * 100)
+      const reset = formatResetLabel(resetTimestampSeconds(signalValue(signals, `anthropic-ratelimit-unified-${label}-reset`)))
+      const exhausted = remainingPercent <= 0
+      windows.push({
+        id: `claude-${label}`,
+        label,
+        remainingPercent,
+        resetLabel: reset,
+        exhausted,
+        risk: deriveQuotaRisk(remainingPercent, exhausted),
+      })
+    }
+    return windows
+  }
+  if (normalizedProvider === 'codex') {
+    const limitReached = String(signalValue(signals, 'x-codex-limit-reached') ?? '').toLowerCase() === 'true'
+      || String(signalValue(signals, 'x-codex-allowed') ?? '').toLowerCase() === 'false'
+    for (const name of ['primary', 'secondary'] as const) {
+      const prefix = `x-codex-${name}-`
+      const used = compactNumber(signalValue(signals, `${prefix}used-percent`), null)
+      if (used === null || used < 0) continue
+      const minutes = compactNumber(signalValue(signals, `${prefix}window-minutes`), null)
+      const resetAt = resetTimestampSeconds(signalValue(signals, `${prefix}reset-at`))
+      const resetAfter = compactNumber(signalValue(signals, `${prefix}reset-after-seconds`), 0) ?? 0
+      const reset = resetAt > 0 ? resetAt : resetAfter > 0 ? now.getTime() / 1000 + resetAfter : 0
+      const id = minutes === 300 ? 'code-5h' : minutes === 10_080 ? 'code-7d' : `code-${minutes ?? name}`
+      const remainingPercent = clampPercent(100 - used)
+      const exhausted = remainingPercent <= 0 || (limitReached && reset > 0)
+      windows.push({
+        id,
+        label: signalDurationLabel(minutes),
+        remainingPercent,
+        resetLabel: formatResetLabel(reset),
+        exhausted,
+        risk: deriveQuotaRisk(remainingPercent, exhausted),
+      })
+    }
+  }
+  return windows
+}
+
+export function normalizePluginQuotaWindows(payload: JsonValue | null | undefined): QuotaWindow[] {
+  const root = asJsonRecord(payload)
+  const groups = isArray(root?.groups) ? root.groups : []
+  const windows: QuotaWindow[] = []
+  for (const group of groups) {
+    if (!isJsonRecord(group)) continue
+    const groupLabel = stringOrEmpty(firstScalar(group, ['displayName', 'display_name']))
+    const buckets = isArray(group.buckets) ? group.buckets : []
+    for (const bucket of buckets) {
+      if (!isJsonRecord(bucket)) continue
+      const remaining = compactNumber(firstScalar(bucket, ['remainingFraction', 'remaining_fraction', 'remaining']), null)
+      const remainingPercent = remaining === null ? null : clampPercent(remaining * 100)
+      const windowName = stringOrEmpty(firstScalar(bucket, ['window', 'description'])) || groupLabel || `window-${windows.length + 1}`
+      const id = [groupLabel, windowName].filter(Boolean).join(':').toLowerCase().replace(/\s+/g, '-')
+      const reset = formatResetLabel(resetTimestampSeconds(firstScalar(bucket, ['resetTime', 'reset_time'])))
+      const exhausted = remaining !== null && remaining <= 0
+      const label = groupLabel !== '' && groupLabel !== windowName ? `${groupLabel} ${windowName}` : windowName
+      windows.push({
+        id: id || `window-${windows.length + 1}`,
+        label,
+        remainingPercent,
+        resetLabel: reset,
+        exhausted,
+        risk: deriveQuotaRisk(remainingPercent, exhausted),
+      })
+    }
+  }
+  return windows
+}
+
+export function normalizePluginQuotaReport(
+  provider: string,
+  label: string,
+  authIndex: string,
+  planType: string,
+  payload: JsonValue | null | undefined,
+  now = new Date(),
+): CpaQuotaReport {
+  const root = asJsonRecord(payload)
+  const subscription = firstRecord(root, ['subscription'])
+  const resolvedPlan = stringOrEmpty(firstScalar(subscription, ['plan', 'tierName', 'tier_name'])) || planType || ''
+  const windows = normalizePluginQuotaWindows(payload)
+  return {
+    provider,
+    authIndex,
+    label,
+    planType: resolvedPlan,
+    status: deriveStatus(windows),
+    risk: reportRisk(windows),
+    windows,
+    refreshedAt: now.toISOString(),
+  }
 }
 
 export function normalizeQuotaReport(
@@ -506,6 +649,20 @@ export function sanitizeAuthFile(entry: JsonValue | null | undefined): CpaAccoun
     planType: planType(entry),
     projectId: projectId(entry),
   }
+  const renewalState = stringOrEmpty(firstScalar(entry, ['renewal_state', 'renewalState']))
+  const recoveryStage = stringOrEmpty(firstScalar(entry, ['recovery_stage', 'recoveryStage']))
+  const quotaPluginId = stringOrEmpty(firstScalar(entry, ['quota_plugin_id', 'quotaPluginId']))
+  const siwcStatus = stringOrEmpty(firstScalar(entry, ['siwc_status', 'siwcStatus']))
+  const weight = firstNumber(entry, ['weight'])
+  const requestRetry = firstNumber(entry, ['request_retry', 'requestRetry'])
+  const passiveQuotaRecord = firstRecord(entry, ['quota'])
+  const passiveSignals = firstRecord(passiveQuotaRecord, ['signals'])
+  const passiveObservedAtRaw = firstScalar(passiveQuotaRecord, ['observed_at', 'observedAt'])
+  const passiveObservedMs = isString(passiveObservedAtRaw) ? Date.parse(passiveObservedAtRaw) : Number.NaN
+  const passiveObservedAt = Number.isFinite(passiveObservedMs) && passiveObservedMs > 0
+    ? new Date(passiveObservedMs)
+    : new Date()
+  const passiveWindows = normalizePassiveSignalWindows(provider, passiveSignals, passiveObservedAt)
   if (name !== '') account.name = name.slice(0, 240)
   if (statusMessage !== '') account.statusMessage = statusMessage
   if (priority !== undefined) account.priority = priority
@@ -515,6 +672,28 @@ export function sanitizeAuthFile(entry: JsonValue | null | undefined): CpaAccoun
   if (entry.websockets === true) account.websockets = true
   if (entry.runtime_only === true || entry.runtimeOnly === true) account.runtimeOnly = true
   if (entry.quota_auto_disabled === true || entry.quotaAutoDisabled === true) account.quotaAutoDisabled = true
+  if (weight !== undefined && weight > 0) account.weight = weight
+  if (requestRetry !== undefined && requestRetry >= 0) account.requestRetry = requestRetry
+  if (entry.requires_sign_in === true || entry.requiresSignIn === true) account.requiresSignIn = true
+  if (renewalState !== '') account.renewalState = renewalState
+  if (recoveryStage !== '') account.recoveryStage = recoveryStage
+  if (entry.quota_blocked === true || entry.quotaBlocked === true) account.quotaBlocked = true
+  if (quotaPluginId !== '') account.quotaPluginId = quotaPluginId
+  if (siwcStatus !== '') account.siwcStatus = siwcStatus
+  if (entry.use_siwc === true || entry.useSiwc === true) account.useSiwc = true
+  if (passiveWindows.length > 0) {
+    const signalPlan = passiveSignals === null ? '' : stringOrEmpty(signalValue(passiveSignals, 'x-codex-plan-type'))
+    account.passiveQuota = {
+      provider,
+      authIndex,
+      label: account.label,
+      planType: account.planType || signalPlan,
+      status: deriveStatus(passiveWindows),
+      risk: reportRisk(passiveWindows),
+      windows: passiveWindows,
+      refreshedAt: passiveObservedAt.toISOString(),
+    }
+  }
   return account
 }
 
@@ -700,9 +879,10 @@ function mergeProviderAccount(credential: CpaAccount, provider: CpaAccount): Cpa
 }
 
 export function publicAccount(account: CpaAccount): CpaAccountPublic {
-  const { accountId: _accountId, projectId: _projectId, ...rest } = account
+  const { accountId: _accountId, projectId: _projectId, passiveQuota: _passiveQuota, ...rest } = account
   void _accountId
   void _projectId
+  void _passiveQuota
   return rest
 }
 
@@ -873,10 +1053,26 @@ async function queryAntigravity(baseURL: string, managementKey: string, account:
   return normalizeQuotaReport('antigravity', account.label, account.authIndex, account.planType, payload, now)
 }
 
-function quotaForProvider(provider: string): QuotaQuery | undefined {
-  if (provider === 'codex') return queryCodex
-  if (provider === 'gemini-cli') return queryGemini
-  if (provider === 'antigravity') return queryAntigravity
+async function queryPluginQuota(
+  baseURL: string,
+  managementKey: string,
+  account: CpaAccount,
+  now: Date,
+): Promise<CpaQuotaReport> {
+  const pluginId = account.quotaPluginId ?? ''
+  if (pluginId === '') {
+    return normalizeQuotaReport(account.provider, account.label, account.authIndex, account.planType, null, now)
+  }
+  const path = `${CPA_PLUGINS_PATH}/${encodeURIComponent(pluginId)}/quota?auth_index=${encodeURIComponent(account.authIndex)}`
+  const payload = await managementApi(baseURL, managementKey, path)
+  return normalizePluginQuotaReport(account.provider, account.label, account.authIndex, account.planType, payload, now)
+}
+
+function quotaForAccount(account: CpaAccount): QuotaQuery | undefined {
+  if (isNonEmptyString(account.quotaPluginId)) return queryPluginQuota
+  if (account.provider === 'codex') return queryCodex
+  if (account.provider === 'gemini-cli') return queryGemini
+  if (account.provider === 'antigravity') return queryAntigravity
   return undefined
 }
 
@@ -931,13 +1127,20 @@ export class CpaQuotaService {
     const files = filesResult.status === 'fulfilled' ? filesResult.value : []
     const apiProviders = providersResult.status === 'fulfilled' ? providersResult.value : []
     this.accounts = mergeAccounts(files, apiProviders)
+    for (const account of this.accounts) {
+      if (account.passiveQuota === undefined) continue
+      const existing = this.quota.get(account.authIndex)
+      if (existing === undefined || refreshedAtMs(account.passiveQuota) > refreshedAtMs(existing)) {
+        this.quota.set(account.authIndex, account.passiveQuota)
+      }
+    }
     this.accountsFetchedAt = now
     return this.accounts
   }
 
   async refreshQuota(now = Date.now()): Promise<Map<string, CpaQuotaReport>> {
     const accounts = await this.ensureAccounts(now)
-    const tasks = accounts.filter(account => quotaForProvider(account.provider) !== undefined)
+    const tasks = accounts.filter(account => quotaForAccount(account) !== undefined)
     if (tasks.length === 0) return this.quota
     const concurrency = optionValue(this.options.concurrency) ?? 4
     const queue = [...tasks]
@@ -961,25 +1164,30 @@ export class CpaQuotaService {
     }
     const inflight = this.inFlight.get(account.authIndex)
     if (inflight !== undefined) return inflight
-    const query = quotaForProvider(account.provider)
-    if (query === undefined) return existing
+    const query = quotaForAccount(account)
+    if (query === undefined) return existing ?? account.passiveQuota
     const baseURL = resolvedOption(this.options.baseURL)
     const managementKey = resolvedOption(this.options.managementKey)
     const task = (async () => {
       try {
         const report = await query(baseURL, managementKey, account, new Date(now))
+        if (report.windows.length === 0 && account.passiveQuota !== undefined) {
+          this.quota.set(account.authIndex, account.passiveQuota)
+          return account.passiveQuota
+        }
         this.quota.set(account.authIndex, report)
         return report
       } catch {
-        this.quota.set(account.authIndex, normalizeQuotaReport(
+        const fallback = account.passiveQuota ?? normalizeQuotaReport(
           account.provider,
           account.label,
           account.authIndex,
           account.planType,
           null,
           new Date(now),
-        ))
-        return this.quota.get(account.authIndex)
+        )
+        this.quota.set(account.authIndex, fallback)
+        return fallback
       } finally {
         this.inFlight.delete(account.authIndex)
       }

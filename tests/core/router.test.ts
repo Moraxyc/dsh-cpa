@@ -81,4 +81,35 @@ describe('core/router', () => {
       reasons: ['quota-available'],
     })
   })
+
+  it('treats requiresSignIn and quotaBlocked accounts as unavailable during route planning', () => {
+    const plan = planCpaRoute({
+      model: 'requested',
+      messages: [],
+      reasoningEffort: undefined,
+      maxTokens: 1024,
+    }, {
+      models: [{ id: 'requested', contextLength: 16_384 }],
+      accounts: [{ authIndex: 'need-login', modelAliases: ['requested'], requiresSignIn: true }],
+      quota: {},
+      defaultContextWindow: 16_384,
+      defaultMaxTokens: 1024,
+    })
+    assert.equal(plan.preflight.status, 'warning')
+    assert.equal(plan.preflight.issues.some(issue => issue.code === 'ACCOUNT_UNAVAILABLE'), true)
+
+    const blockedPlan = planCpaRoute({
+      model: 'requested',
+      messages: [],
+      reasoningEffort: undefined,
+      maxTokens: 1024,
+    }, {
+      models: [{ id: 'requested', contextLength: 16_384 }],
+      accounts: [{ authIndex: 'blocked', modelAliases: ['requested'], quotaBlocked: true }],
+      quota: {},
+      defaultContextWindow: 16_384,
+      defaultMaxTokens: 1024,
+    })
+    assert.equal(blockedPlan.preflight.issues.some(issue => issue.code === 'ACCOUNT_UNAVAILABLE'), true)
+  })
 })
